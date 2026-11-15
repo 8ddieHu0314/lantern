@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lantern</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Lantern</h1>
+      <p>For when the hospital goes dark.</p>
+    </div>
+    <ul class="status" aria-label="System status">
+      <li id="st-network" class="pill">Network: checking</li>
+      <li id="st-speech" class="pill">Speech: checking</li>
+      <li id="st-llm" class="pill">Bonsai: checking</li>
+    </ul>
+  </header>
+
+  <main class="columns">
+    <section class="panel visit" aria-labelledby="visit-h">
+      <div class="panel-head">
+        <h2 id="visit-h">Visit</h2>
+        <span id="timer" class="timer" aria-live="off">0:00</span>
+      </div>
+
+      <div class="controls">
+        <button id="record" class="btn primary" type="button">Start recording</button>
+        <button id="sample" class="btn" type="button" hidden>Use sample visit</button>
+        <label class="btn file">
+          Open audio file
+          <input id="file" type="file" accept="audio/*">
+        </label>
+      </div>
+      <div class="meter" aria-hidden="true"><div id="level"></div></div>
+      <p id="progress" class="progress" role="status" aria-live="polite"></p>
+
+      <div id="transcript-empty" class="empty">
+        <p><strong>No visit yet.</strong> Press Start recording and talk as usual. When you stop, Lantern writes down who said what, then drafts the note.</p>
+        <p>Audio is processed on this laptop and never sent anywhere.</p>
+      </div>
+
+      <div id="transcript-wrap" hidden>
+        <div class="transcript-head">
+          <h3>Transcript</h3>
+          <button id="swap" class="btn small" type="button">Swap clinician and patient</button>
+        </div>
+        <ol id="transcript" class="transcript"></ol>
+      </div>
+    </section>
+
+    <section class="panel note-panel" aria-labelledby="note-h">
+      <div class="panel-head no-print">
+        <h2 id="note-h">Note</h2>
+        <div class="note-actions">
+          <button id="copy" class="btn small" type="button" disabled>Copy text</button>
+          <button id="print" class="btn small primary" type="button" disabled>Print</button>
+        </div>
+      </div>
+
+      <div id="note-empty" class="empty">
+        <p><strong>The note appears here.</strong> It has the patient's report, your findings, your assessment and plan, and a handoff summary.</p>
+        <p>Every medication is checked against the recording and flagged for you to verify.</p>
+      </div>
+
+      <article id="note" class="note" hidden>
+        <header class="sheet-head">
+          <div>
+            <p class="sheet-kicker">Downtime clinical note · Draft</p>
+            <h3 id="n-cc" contenteditable="true" spellcheck="false"></h3>
+          </div>
+          <p id="n-date" class="sheet-date"></p>
+        </header>
+
+        <div id="med-banner" class="banner" hidden></div>
+
+        <section><h4>Subjective</h4><ul id="n-subjective" contenteditable="true" spellcheck="false"></ul></section>
+        <section><h4>Objective</h4><ul id="n-objective" contenteditable="true" spellcheck="false"></ul></section>
+        <section><h4>Assessment</h4><ul id="n-assessment" contenteditable="true" spellcheck="false"></ul></section>
+        <section><h4>Plan</h4><ul id="n-plan" contenteditable="true" spellcheck="false"></ul></section>
+        <section><h4>Allergies</h4><ul id="n-allergies" contenteditable="true" spellcheck="false"></ul></section>
+
+        <section>
+          <h4>Medications</h4>
+          <div class="table-wrap">
+            <table id="meds">
+              <thead><tr><th scope="col">Drug</th><th scope="col">Dose</th><th scope="col">Checked against recording</th><th scope="col">Verified</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="meds-none" class="muted" hidden>No medications were mentioned.</p>
+        </section>
+
+        <section><h4>Handoff</h4><p id="n-handoff" contenteditable="true" spellcheck="false"></p></section>
+
+        <footer class="sheet-foot">
+          <p>Drafted on this device by Lantern from a recording of the visit. Not reviewed until signed.</p>
+          <p class="sign">Clinician signature: <span></span> Time: <span class="short"></span></p>
+        </footer>
+      </article>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
