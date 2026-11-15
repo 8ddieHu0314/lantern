@@ -26,6 +26,14 @@ class Segment(BaseModel):
     text: str
 
 
+class Part(BaseModel):
+    """One phrase inside a turn, with its place in the recording."""
+
+    start: float
+    end: float
+    text: str
+
+
 class Turn(BaseModel):
     """Consecutive segments from one speaker. `id` is the line number the note cites."""
 
@@ -34,6 +42,7 @@ class Turn(BaseModel):
     start: float
     end: float
     text: str
+    parts: list[Part] = []
 
 
 class Medication(BaseModel):
@@ -48,6 +57,15 @@ class CheckedMedication(Medication):
     name_heard: bool
     dose_heard: bool
     line_text: str = ""
+
+
+class Source(BaseModel):
+    """Where in the recording a sentence of the note came from. `line` is 0 when nothing matched."""
+
+    line: int = 0
+    start: float = 0
+    end: float = 0
+    quote: str = ""
 
 
 class CheckedAllergy(BaseModel):
@@ -73,10 +91,12 @@ def merge_turns(segments: list[Segment]) -> list[Turn]:
         same_speaker = turns and (
             segment.speaker == turns[-1].speaker or segment.speaker == UNKNOWN_SPEAKER
         )
+        part = Part(start=segment.start, end=segment.end, text=text)
         if same_speaker:
             last = turns[-1]
             last.text = f"{last.text} {text}"
             last.end = max(last.end, segment.end)
+            last.parts.append(part)
         else:
             turns.append(
                 Turn(
@@ -85,6 +105,7 @@ def merge_turns(segments: list[Segment]) -> list[Turn]:
                     start=segment.start,
                     end=segment.end,
                     text=text,
+                    parts=[part],
                 )
             )
     return turns
@@ -278,3 +299,79 @@ def check_allergies(allergies: list[str], turns: list[Turn]) -> list[CheckedAlle
             )
         )
     return checked
+
+
+# Words too common to show where a sentence came from, plus the note's own vocabulary
+# ("the patient reports"), which the people in the room never say.
+_FILLER = set(
+    "the and for with has have had was were are not but that this these those from about when will would "
+    "your you his her their they she him its any some into than then there out per due also very "
+    "patient clinician reports reported states stated denies notes noted".split()
+)
+_ENDINGS = ("ness", "ing", "ed", "es", "ly", "s")
+_MAX_PHRASES = 3
+
+
+def _stem(word: str) -> str:
+    """Trim a common ending so "tenderness" meets "tender" and "hurts" meets "hurt"."""
+    for ending in _ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            return word[: -len(ending)]
+    return word
+
+
+def _content(text: str) -> set[str]:
+    return {_stem(w) for w in _words(text) if len(w) > 2 and w not in _FILLER}
+
+
+def find_source(sentence: str, turns: list[Turn]) -> Source:
+    """Trace a sentence of the note to the place in the recording that said it.
+
+    Looks for the shortest run of up to three neighbouring phrases, inside one
+    turn, that contains enough of the sentence's content words: at least half
+    of them, and at least two unless the sentence only has one. If no run is
+    enough but a whole turn is, the sentence points at that turn's best phrase.
+    Otherwise the sentence has no source, which is how a line the model made up
+    shows itself.
+
+    This checks that the words were said, not that the sentence means the same
+    thing, so it is a pointer for the clinician and not a proof.
+    """
+    wanted = _content(sentence)
+    if not wanted:
+        return Source()
+
+    def found(text: str) -> int:
+        return len(wanted & _content(text))
+
+    def enough(count: int) -> bool:
+        return count >= min(2, len(wanted)) and count * 2 >= len(wanted)
+
+    best: tuple[int, int, float, Turn, list[Part]] | None = None
+    whole: tuple[int, Turn] | None = None
+    for turn in turns:
+        parts = turn.parts or [Part(start=turn.start, end=turn.end, text=turn.text)]
+        in_turn = found(turn.text)
+        if whole is None or in_turn > whole[0]:
+            whole = (in_turn, turn)
+        for first in range(len(parts)):
+            for size in range(1, _MAX_PHRASES + 1):
+                run = parts[first : first + size]
+                if len(run) < size:
+                    break
+                score = found(" ".join(part.text for part in run))
+                # More of the sentence's words wins; on a tie the shorter run does.
+                key = (score, -size, -(run[-1].end - run[0].start))
+                if best is None or key > best[:3]:
+                    best = (*key, turn, run)
+
+    if best is None or whole is None:
+        return Source()
+    score, _, _, turn, run = best
+    if not enough(score):
+        if not enough(whole[0]):
+            return Source()
+        turn = whole[1]
+        parts = turn.parts or [Part(start=turn.start, end=turn.end, text=turn.text)]
+        run = [max(parts, key=lambda part: found(part.text))]
+    return Source(line=turn.id, start=run[0].start, end=run[-1].end, quote=" ".join(part.text for part in run))

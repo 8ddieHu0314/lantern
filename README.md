@@ -14,9 +14,11 @@ Built for the Local AI Hackathon at Cornell (theme: Recreate).
 1. **Record** the visit in the browser.
 2. **Transcribe** it and **label the speakers** (clinician, patient) on-device.
 3. **Draft the note**: subjective, objective, assessment, plan, allergies, medications and a handoff.
-4. **Check every medication and allergy** against the recording. A drug, dose or allergy that was
+4. **Trace every sentence** of the note to the phrase in the recording it came from. Click a
+   sentence to see that phrase lit up and hear it. A sentence with no source is marked.
+5. **Check every medication and allergy** against the recording. A drug, dose or allergy that was
    not actually said is marked, and each one links to the transcript line it came from.
-5. **Review, edit and print** the note.
+6. **Review, edit and print** the note.
 
 ## How it's built
 
@@ -34,7 +36,7 @@ Python app (app/, :8000)
 | Who is speaking | Argmax SpeakerKit (Pyannote, Core ML) |
 | Text to speech | Argmax TTSKit (Qwen3-TTS, Core ML) |
 | Note writing | PrismML Bonsai 2 9B (1.58-bit weights, about 3.5 GB) on MLX |
-| Medication and allergy check | Plain code in `app/pipeline.py`: the model lists them, the code checks them against the transcript |
+| Sources and safety checks | Plain code in `app/pipeline.py`: the model writes the note, the code traces each sentence, drug and allergy back to the transcript |
 
 All servers bind to `127.0.0.1`. The page loads no fonts, scripts or styles from the web.
 

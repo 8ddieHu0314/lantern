@@ -28,11 +28,14 @@ from pipeline import (
     assign_roles,
     check_allergies,
     check_medications,
+    find_source,
     format_transcript,
     merge_turns,
 )
 
 SPEECH_URL = os.environ.get("LANTERN_SPEECH_URL", "http://127.0.0.1:8001")
+# The sections whose sentences are each traced back to the recording.
+SOURCED_SECTIONS = ("subjective", "objective", "assessment", "plan")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
@@ -125,16 +128,16 @@ async def note(body: NoteRequest, request: Request):
     except llm.LLMError as error:
         raise HTTPException(502, str(error)) from error
 
+    sections = {name: _strings(raw.get(name)) for name in SOURCED_SECTIONS}
     return {
         "note": {
             "chief_complaint": str(raw.get("chief_complaint") or "").strip(),
-            "subjective": _strings(raw.get("subjective")),
-            "objective": _strings(raw.get("objective")),
-            "assessment": _strings(raw.get("assessment")),
-            "plan": _strings(raw.get("plan")),
+            **sections,
             "allergies": _strings(raw.get("allergies")),
             "handoff": str(raw.get("handoff") or "").strip(),
         },
+        # One entry per sentence, in the same order as the section's sentences.
+        "sources": {name: [find_source(sentence, body.turns) for sentence in sections[name]] for name in SOURCED_SECTIONS},
         "medications": check_medications(_medications(raw.get("medications")), body.turns),
         "allergies": check_allergies(_strings(raw.get("allergies")), body.turns),
         "seconds": round(time.monotonic() - started, 1),

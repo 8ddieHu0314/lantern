@@ -7,6 +7,7 @@ const state = {
   turns: [],
   roles: {},
   recorder: null,
+  audioUrl: null,
   tick: null,
   busy: false,
 };
@@ -159,6 +160,21 @@ function stopMeter() {
   $("level").style.width = "0";
 }
 
+// ---------- playback ----------
+
+// The recording stays in the browser so any line of the note can be played back.
+const player = new Audio();
+let playTimer = null;
+
+function playRange(start, end) {
+  if (!state.audioUrl) return;
+  clearTimeout(playTimer);
+  const from = Math.max(0, start - 0.1);
+  player.currentTime = from;
+  player.play().catch(() => {});
+  playTimer = setTimeout(() => player.pause(), (end + 0.25 - from) * 1000);
+}
+
 // ---------- pipeline ----------
 
 async function api(path, options) {
@@ -176,6 +192,9 @@ async function processAudio(arrayBuffer) {
   let stop = progressTimer("Preparing the audio");
   try {
     const wav = await toWav(arrayBuffer);
+    if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+    state.audioUrl = URL.createObjectURL(wav);
+    player.src = state.audioUrl;
     stop();
     stop = progressTimer("Writing down who said what");
     const result = await api("/api/transcribe", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
@@ -231,16 +250,64 @@ function renderTranscript() {
     const item = el("li", `turn ${role}`);
     item.id = `turn-${turn.id}`;
     item.title = clock(turn.start);
-    item.append(el("span", "num", String(turn.id)), el("span", "role", role), el("span", "text", turn.text));
+    const num = el("button", "num", String(turn.id));
+    num.type = "button";
+    num.setAttribute("aria-label", `Play line ${turn.id}`);
+    num.addEventListener("click", () => playRange(turn.start, turn.end));
+
+    const text = el("span", "text");
+    const parts = turn.parts?.length ? turn.parts : [{ start: turn.start, end: turn.end, text: turn.text }];
+    parts.forEach((part, index) => {
+      const phrase = el("span", "part", part.text);
+      phrase.dataset.start = part.start;
+      text.append(phrase, index < parts.length - 1 ? " " : "");
+    });
+
+    item.append(num, el("span", "role", role), text);
     list.append(item);
   }
   $("transcript-empty").hidden = true;
   $("transcript-wrap").hidden = false;
 }
 
-function fillList(id, items) {
+// One sentence per row: the editable text, then where in the recording it came from.
+function fillList(id, items, sources = []) {
   const list = $(id);
-  list.replaceChildren(...items.map((item) => el("li", "", item)));
+  list.replaceChildren(...items.map((item, index) => {
+    const row = el("li");
+    const say = el("span", "say", item);
+    say.contentEditable = "true";
+    say.spellcheck = false;
+    // Clearing a sentence removes it, which is how a line with no source gets dismissed.
+    say.addEventListener("blur", () => {
+      if (!say.textContent.trim()) { row.remove(); updateBanner(); }
+    });
+    row.append(say, " ", sourceChip(sources[index]));
+    return row;
+  }));
+}
+
+function sourceChip(source) {
+  if (!source) return "";
+  if (!source.line) return el("span", "check unheard", "Not found in recording");
+  const chip = el("button", "src", `line ${source.line}`);
+  chip.type = "button";
+  chip.title = `Heard: "${source.quote}"`;
+  chip.setAttribute("aria-label", `Play where this was said, line ${source.line}`);
+  chip.addEventListener("click", () => showSource(source));
+  return chip;
+}
+
+// Scrolls to the line, lights up the exact phrase and plays it.
+function showSource(source) {
+  goToLine(source.line);
+  document.querySelectorAll(".part.lit").forEach((part) => part.classList.remove("lit"));
+  const turn = $(`turn-${source.line}`);
+  for (const part of turn ? turn.querySelectorAll(".part") : []) {
+    const start = Number(part.dataset.start);
+    if (start >= source.start - 0.01 && start < source.end) part.classList.add("lit");
+  }
+  playRange(source.start, source.end);
 }
 
 function goToLine(line) {
@@ -261,17 +328,21 @@ function updateBanner() {
     return { ...kind, total: boxes.length, left: boxes.filter((box) => !box.checked).length };
   }).filter((kind) => kind.total);
 
-  const banner = $("med-banner");
-  banner.hidden = kinds.length === 0;
   const waiting = kinds.filter((kind) => kind.left);
-  const unheard = document.querySelectorAll("#note .check.unheard").length;
-  banner.className = waiting.length === 0 ? "banner clear" : unheard ? "banner alert" : "banner";
-  if (waiting.length === 0) banner.textContent = `All ${kinds.map((kind) => kind.many).join(" and ")} verified.`;
-  else {
+  // A "not found" mark stops counting once its row is ticked as verified.
+  const unheard = [...document.querySelectorAll("#note .check.unheard")]
+    .filter((mark) => !mark.closest("tr")?.querySelector("input").checked).length;
+
+  const banner = $("med-banner");
+  banner.hidden = kinds.length === 0 && unheard === 0;
+  banner.className = unheard ? "banner alert" : waiting.length ? "banner" : "banner clear";
+  const lines = [];
+  if (waiting.length) {
     const counts = waiting.map((kind) => `${kind.left} ${kind.left === 1 ? kind.one : kind.many}`);
-    banner.textContent = `${counts.join(" and ")} to verify before this note is used.`;
-    if (unheard) banner.textContent += " Some details were not found in the recording.";
-  }
+    lines.push(`${counts.join(" and ")} to verify before this note is used.`);
+  } else if (kinds.length) lines.push(`All ${kinds.map((kind) => kind.many).join(" and ")} verified.`);
+  if (unheard) lines.push("Some details were not found in the recording.");
+  banner.textContent = lines.join(" ");
 }
 
 function checkPill(heard, label) {
@@ -296,13 +367,12 @@ function verifyCell(name) {
   return cell;
 }
 
-function renderNote({ note, medications, allergies }) {
+function renderNote({ note, medications, allergies, sources }) {
   $("n-cc").textContent = note.chief_complaint || "Visit note";
   $("n-date").textContent = new Date().toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-  fillList("n-subjective", note.subjective);
-  fillList("n-objective", note.objective);
-  fillList("n-assessment", note.assessment);
-  fillList("n-plan", note.plan);
+  for (const section of ["subjective", "objective", "assessment", "plan"]) {
+    fillList(`n-${section}`, note[section], sources[section]);
+  }
   $("n-handoff").textContent = note.handoff;
 
   const allergyRows = document.querySelector("#allergies tbody");
@@ -347,7 +417,9 @@ function renderNote({ note, medications, allergies }) {
 }
 
 function noteAsText() {
-  const items = (id) => [...$(id).querySelectorAll("li")].map((li) => `- ${li.textContent}`).join("\n") || "- Nothing was said.";
+  const items = (id) => [...$(id).querySelectorAll("li")]
+    .map((li) => `- ${li.querySelector(".say").textContent}${li.querySelector(".unheard") ? " (NOT found in recording)" : ""}`)
+    .join("\n") || "- Nothing was said.";
   const verified = (row) => (row.querySelector("input").checked ? " (verified)" : " (NOT verified)");
   const meds = [...document.querySelectorAll("#meds tbody tr")].map((row) => {
     const [name, dose] = [...row.children].map((cell) => cell.textContent);

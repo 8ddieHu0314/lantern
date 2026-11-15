@@ -10,6 +10,7 @@ from pipeline import (
     check_allergies,
     check_medications,
     extract_json,
+    find_source,
     format_transcript,
     merge_turns,
     number_values,
@@ -145,6 +146,83 @@ class CheckMedicationsTest(unittest.TestCase):
 
     def test_no_dose_given_means_no_dose_heard(self):
         self.assertFalse(self.check(name="ibuprofen", dose="", line=3).dose_heard)
+
+
+class FindSourceTest(unittest.TestCase):
+    def setUp(self):
+        self.turns = merge_turns(
+            [
+                seg(0, "Any numbness or tingling in your fingers?", 12.4, 14.3),
+                seg(1, "A little tingling in my thumb.", 15.5, 17.1),
+                seg(0, "Okay,", 29.0, 29.6),
+                seg(0, "there's swelling and tenderness over the right wrist.", 29.8, 33.0),
+                seg(0, "This looks like a distal radius fracture.", 36.9, 38.8),
+                seg(0, "I'll give you... ibuprofen.", 45.8, 47.6),
+                seg(0, "400 milligrams for the pain.", 48.1, 50.1),
+            ]
+        )
+
+    def test_turns_keep_the_phrases_they_were_built_from(self):
+        self.assertEqual(len(self.turns), 3)
+        self.assertEqual([part.text for part in self.turns[2].parts][:2], ["Okay,", "there's swelling and tenderness over the right wrist."])
+        self.assertEqual((self.turns[2].parts[1].start, self.turns[2].parts[1].end), (29.8, 33.0))
+
+    def test_a_sentence_is_traced_to_the_phrase_that_said_it(self):
+        source = find_source("swelling and tenderness over right wrist", self.turns)
+        self.assertEqual(source.line, 3)
+        self.assertEqual((source.start, source.end), (29.8, 33.0))
+        self.assertEqual(source.quote, "there's swelling and tenderness over the right wrist.")
+
+    def test_the_best_matching_line_wins(self):
+        self.assertEqual(find_source("little tingling in thumb", self.turns).line, 2)
+
+    def test_different_word_endings_still_match(self):
+        self.assertEqual(find_source("tender and swollen wrist, looks like fractures", self.turns).line, 3)
+
+    def test_a_sentence_spread_over_two_phrases_gets_both(self):
+        source = find_source("give ibuprofen 400 milligrams for pain", self.turns)
+        self.assertEqual((source.line, source.start, source.end), (3, 45.8, 50.1))
+        self.assertEqual(source.quote, "I'll give you... ibuprofen. 400 milligrams for the pain.")
+
+    def test_a_sentence_nobody_said_has_no_source(self):
+        source = find_source("follow up in one week", self.turns)
+        self.assertEqual((source.line, source.quote), (0, ""))
+
+    def test_one_shared_word_is_not_a_source(self):
+        self.assertEqual(find_source("severe chest pain radiating to the jaw", self.turns).line, 0)
+        self.assertEqual(find_source("chest pain", self.turns).line, 0)
+
+    def test_a_one_word_sentence_needs_that_word(self):
+        self.assertEqual(find_source("fracture", self.turns).line, 3)
+        self.assertEqual(find_source("sprain", self.turns).line, 0)
+
+    def test_a_sentence_with_only_filler_words_has_no_source(self):
+        self.assertEqual(find_source("the patient was not", self.turns).line, 0)
+
+    def test_words_spread_across_a_long_turn_point_at_its_best_phrase(self):
+        turns = merge_turns(
+            [
+                seg(0, "I landed on my left hand.", 1, 3),
+                seg(0, "It hurts a lot.", 3, 5),
+                seg(0, "Can you move it?", 5, 6),
+                seg(0, "Not really.", 6, 7),
+                seg(0, "It's just a pain.", 9, 10),
+                seg(0, "Did you take any medications?", 11, 13),
+                seg(0, "Yes, metformin.", 13, 15),
+                seg(0, "Any allergies?", 15, 16),
+                seg(0, "Okay, your wrist is swollen.", 20, 22),
+            ]
+        )
+        source = find_source("pain in left wrist", turns)
+        self.assertEqual(source.line, 1)
+        self.assertIn(source.quote, [part.text for part in turns[0].parts])
+
+    def test_turns_without_phrases_fall_back_to_the_whole_line(self):
+        from pipeline import Turn
+
+        turns = [Turn(id=1, speaker=0, start=2.0, end=6.0, text="My wrist hurts a lot.")]
+        source = find_source("wrist hurts a lot", turns)
+        self.assertEqual((source.line, source.start, source.end), (1, 2.0, 6.0))
 
 
 class CheckAllergiesTest(unittest.TestCase):
