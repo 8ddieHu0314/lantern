@@ -202,7 +202,7 @@ async function writeNote() {
     });
     stop();
     renderNote(result);
-    progress(`Note drafted in ${result.seconds}s. Check the medications, then print.`);
+    progress(`Note drafted in ${result.seconds}s. Check the medications and allergies, then print.`);
   } catch (error) {
     stop();
     progress(`The note couldn't be drafted: ${error.message}`, true);
@@ -251,29 +251,75 @@ function goToLine(line) {
   setTimeout(() => turn.classList.remove("flash"), 1800);
 }
 
+// Counts the medications and allergies nobody has ticked as verified yet.
 function updateBanner() {
-  const boxes = [...document.querySelectorAll("#meds tbody input")];
+  const kinds = [
+    { table: "meds", one: "medication", many: "medications" },
+    { table: "allergies", one: "allergy", many: "allergies" },
+  ].map((kind) => {
+    const boxes = [...document.querySelectorAll(`#${kind.table} tbody input`)];
+    return { ...kind, total: boxes.length, left: boxes.filter((box) => !box.checked).length };
+  }).filter((kind) => kind.total);
+
   const banner = $("med-banner");
-  banner.hidden = boxes.length === 0;
-  const left = boxes.filter((box) => !box.checked).length;
-  const unheard = document.querySelectorAll("#meds .check.unheard").length;
-  banner.className = left === 0 ? "banner clear" : unheard ? "banner alert" : "banner";
-  if (left === 0) banner.textContent = "All medications verified.";
+  banner.hidden = kinds.length === 0;
+  const waiting = kinds.filter((kind) => kind.left);
+  const unheard = document.querySelectorAll("#note .check.unheard").length;
+  banner.className = waiting.length === 0 ? "banner clear" : unheard ? "banner alert" : "banner";
+  if (waiting.length === 0) banner.textContent = `All ${kinds.map((kind) => kind.many).join(" and ")} verified.`;
   else {
-    banner.textContent = `${left} medication${left === 1 ? "" : "s"} to verify before this note is used.`;
+    const counts = waiting.map((kind) => `${kind.left} ${kind.left === 1 ? kind.one : kind.many}`);
+    banner.textContent = `${counts.join(" and ")} to verify before this note is used.`;
     if (unheard) banner.textContent += " Some details were not found in the recording.";
   }
 }
 
-function renderNote({ note, medications }) {
+function checkPill(heard, label) {
+  return el("span", `check ${heard ? "heard" : "unheard"}`, heard ? `${label} heard` : `${label} not heard`);
+}
+
+function lineLink(line) {
+  const link = el("button", "line-link", `line ${line}`);
+  link.type = "button";
+  link.addEventListener("click", () => goToLine(line));
+  return link;
+}
+
+// The "Verified" checkbox cell that ends every medication and allergy row.
+function verifyCell(name) {
+  const cell = el("td");
+  const box = el("input");
+  box.type = "checkbox";
+  box.setAttribute("aria-label", `Verified ${name}`);
+  box.addEventListener("change", updateBanner);
+  cell.append(box);
+  return cell;
+}
+
+function renderNote({ note, medications, allergies }) {
   $("n-cc").textContent = note.chief_complaint || "Visit note";
   $("n-date").textContent = new Date().toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
   fillList("n-subjective", note.subjective);
   fillList("n-objective", note.objective);
   fillList("n-assessment", note.assessment);
   fillList("n-plan", note.plan);
-  fillList("n-allergies", note.allergies);
   $("n-handoff").textContent = note.handoff;
+
+  const allergyRows = document.querySelector("#allergies tbody");
+  allergyRows.replaceChildren();
+  for (const allergy of allergies) {
+    const row = el("tr");
+    const name = el("td", "", allergy.name);
+    name.contentEditable = "true";
+    name.spellcheck = false;
+    const checks = el("td");
+    checks.append(checkPill(allergy.heard, "Allergy"));
+    if (allergy.line) checks.append(lineLink(allergy.line));
+    row.append(name, checks, verifyCell(allergy.name));
+    allergyRows.append(row);
+  }
+  $("allergies").hidden = allergies.length === 0;
+  $("allergies-none").hidden = allergies.length !== 0;
 
   const body = document.querySelector("#meds tbody");
   body.replaceChildren();
@@ -283,24 +329,11 @@ function renderNote({ note, medications }) {
     row.append(el("td", "", med.dose || "none said"));
 
     const checks = el("td");
-    checks.append(el("span", `check ${med.name_heard ? "heard" : "unheard"}`, med.name_heard ? "Drug heard" : "Drug not heard"));
+    checks.append(checkPill(med.name_heard, "Drug"));
     if (!med.dose) checks.append(el("span", "check nodose", "No dose said"));
-    else checks.append(el("span", `check ${med.dose_heard ? "heard" : "unheard"}`, med.dose_heard ? "Dose heard" : "Dose not heard"));
-    if (med.line) {
-      const link = el("button", "line-link", `line ${med.line}`);
-      link.type = "button";
-      link.addEventListener("click", () => goToLine(med.line));
-      checks.append(link);
-    }
-    row.append(checks);
-
-    const verify = el("td");
-    const box = el("input");
-    box.type = "checkbox";
-    box.setAttribute("aria-label", `Verified ${med.name}`);
-    box.addEventListener("change", updateBanner);
-    verify.append(box);
-    row.append(verify);
+    else checks.append(checkPill(med.dose_heard, "Dose"));
+    if (med.line) checks.append(lineLink(med.line));
+    row.append(checks, verifyCell(med.name));
     body.append(row);
   }
   document.querySelector("#meds").hidden = medications.length === 0;
@@ -315,10 +348,14 @@ function renderNote({ note, medications }) {
 
 function noteAsText() {
   const items = (id) => [...$(id).querySelectorAll("li")].map((li) => `- ${li.textContent}`).join("\n") || "- Nothing was said.";
+  const verified = (row) => (row.querySelector("input").checked ? " (verified)" : " (NOT verified)");
   const meds = [...document.querySelectorAll("#meds tbody tr")].map((row) => {
     const [name, dose] = [...row.children].map((cell) => cell.textContent);
-    return `- ${name}, ${dose}${row.querySelector("input").checked ? " (verified)" : " (NOT verified)"}`;
+    return `- ${name}, ${dose}${verified(row)}`;
   }).join("\n") || "- None mentioned.";
+  const allergies = [...document.querySelectorAll("#allergies tbody tr")]
+    .map((row) => `- ${row.children[0].textContent}${verified(row)}`)
+    .join("\n") || "- None mentioned.";
   return [
     `DOWNTIME CLINICAL NOTE (draft) · ${$("n-date").textContent}`,
     $("n-cc").textContent, "",
@@ -326,7 +363,7 @@ function noteAsText() {
     "OBJECTIVE", items("n-objective"), "",
     "ASSESSMENT", items("n-assessment"), "",
     "PLAN", items("n-plan"), "",
-    "ALLERGIES", items("n-allergies"), "",
+    "ALLERGIES", allergies, "",
     "MEDICATIONS", meds, "",
     "HANDOFF", $("n-handoff").textContent,
   ].join("\n");

@@ -7,6 +7,7 @@ from pipeline import (
     Medication,
     Segment,
     assign_roles,
+    check_allergies,
     check_medications,
     extract_json,
     format_transcript,
@@ -144,6 +145,50 @@ class CheckMedicationsTest(unittest.TestCase):
 
     def test_no_dose_given_means_no_dose_heard(self):
         self.assertFalse(self.check(name="ibuprofen", dose="", line=3).dose_heard)
+
+
+class CheckAllergiesTest(unittest.TestCase):
+    def setUp(self):
+        self.turns = merge_turns(
+            [
+                seg(0, "Any allergies?"),
+                seg(1, "I'm allergic to penicillin, it gives me a rash. Sulfa drugs too."),
+            ]
+        )
+
+    def check(self, *names):
+        return check_allergies(list(names), self.turns)
+
+    def test_an_allergy_that_was_said_is_heard_with_its_line(self):
+        result = self.check("Penicillin")[0]
+        self.assertTrue(result.heard)
+        self.assertEqual(result.line, 2)
+        self.assertIn("penicillin", result.line_text)
+
+    def test_filler_words_do_not_have_to_be_said(self):
+        self.assertTrue(self.check("penicillin allergy")[0].heard)
+        self.assertTrue(self.check("sulfa drugs")[0].heard)
+
+    def test_an_allergy_nobody_said_is_not_heard(self):
+        result = self.check("latex")[0]
+        self.assertFalse(result.heard)
+        self.assertEqual(result.line, 0)
+
+    def test_a_reaction_nobody_said_makes_the_entry_not_heard(self):
+        self.assertFalse(self.check("penicillin (anaphylaxis)")[0].heard)
+
+    def test_no_known_allergies_points_at_where_allergies_were_discussed(self):
+        turns = merge_turns([seg(0, "Any allergies?"), seg(1, "No, none that I know of.")])
+        result = check_allergies(["No known allergies"], turns)[0]
+        self.assertTrue(result.heard)
+        self.assertEqual(result.line, 1)
+
+    def test_no_known_allergies_is_not_heard_when_allergies_never_came_up(self):
+        turns = merge_turns([seg(0, "What happened?"), seg(1, "I fell.")])
+        self.assertFalse(check_allergies(["No known allergies"], turns)[0].heard)
+
+    def test_each_allergy_is_checked_in_order(self):
+        self.assertEqual([a.heard for a in self.check("penicillin", "latex", "sulfa")], [True, False, True])
 
 
 if __name__ == "__main__":

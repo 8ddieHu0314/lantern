@@ -14,8 +14,8 @@ Built for the Local AI Hackathon at Cornell (theme: Recreate).
 1. **Record** the visit in the browser.
 2. **Transcribe** it and **label the speakers** (clinician, patient) on-device.
 3. **Draft the note**: subjective, objective, assessment, plan, allergies, medications and a handoff.
-4. **Check every medication** against the recording. A drug or dose that was not actually said is
-   marked, and each one links to the transcript line it came from.
+4. **Check every medication and allergy** against the recording. A drug, dose or allergy that was
+   not actually said is marked, and each one links to the transcript line it came from.
 5. **Review, edit and print** the note.
 
 ## How it's built
@@ -34,7 +34,7 @@ Python app (app/, :8000)
 | Who is speaking | Argmax SpeakerKit (Pyannote, Core ML) |
 | Text to speech | Argmax TTSKit (Qwen3-TTS, Core ML) |
 | Note writing | PrismML Bonsai 2 9B (1.58-bit weights, about 3.5 GB) on MLX |
-| Medication check | Plain code in `app/pipeline.py`: the model lists drugs, the code checks them against the transcript |
+| Medication and allergy check | Plain code in `app/pipeline.py`: the model lists them, the code checks them against the transcript |
 
 All servers bind to `127.0.0.1`. The page loads no fonts, scripts or styles from the web.
 
@@ -56,8 +56,9 @@ cd app && ../.venv/bin/python -m unittest test_pipeline
 ## Safety
 
 Lantern drafts; the clinician decides. The note uses only what was said in the visit, every
-medication is flagged until someone ticks it as verified, and the printed note is marked as a draft
-with a signature line. It is a hackathon prototype and has not been evaluated for clinical use.
+medication and allergy is flagged until someone ticks it as verified, and the printed note is
+marked as a draft with a signature line. It is a hackathon prototype and has not been evaluated
+for clinical use.
 The sample visit in `web/sample-visit.wav` is synthetic speech, not a real patient.
 
 ## Team

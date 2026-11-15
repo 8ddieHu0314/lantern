@@ -50,6 +50,15 @@ class CheckedMedication(Medication):
     line_text: str = ""
 
 
+class CheckedAllergy(BaseModel):
+    """An allergy the model listed, checked against what was actually said."""
+
+    name: str
+    heard: bool
+    line: int = 0
+    line_text: str = ""
+
+
 def merge_turns(segments: list[Segment]) -> list[Turn]:
     """Join consecutive segments from the same speaker into numbered turns.
 
@@ -233,6 +242,38 @@ def check_medications(medications: list[Medication], turns: list[Turn]) -> list[
                 line=turn.id if turn is not None else 0,
                 name_heard=name_heard,
                 dose_heard=dose_heard,
+                line_text=turn.text if turn is not None else "",
+            )
+        )
+    return checked
+
+
+# Words that describe an allergy entry without naming what the patient is allergic to.
+_ALLERGY_FILLER = {"allergy", "allergies", "allergic", "known", "none", "drug", "drugs", "and", "the", "reaction"}
+_ALLERGY_WORDS = {"allergy", "allergies", "allergic"}
+
+
+def check_allergies(allergies: list[str], turns: list[Turn]) -> list[CheckedAllergy]:
+    """Check each listed allergy against the transcript.
+
+    An allergy is `heard` when all of its words were said in one line, which is
+    then the line it links to. An entry with no words of its own, such as
+    "No known allergies", cannot be checked word for word: it counts as heard
+    when allergies came up at all, and links to that line for the clinician to read.
+    """
+    spoken = [(turn, set(_words(turn.text))) for turn in turns]
+    checked: list[CheckedAllergy] = []
+    for name in allergies:
+        words = {w for w in _words(name) if len(w) > 2} - _ALLERGY_FILLER
+        if words:
+            turn = next((t for t, said in spoken if words <= said), None)
+        else:
+            turn = next((t for t, said in spoken if said & _ALLERGY_WORDS), None)
+        checked.append(
+            CheckedAllergy(
+                name=name,
+                heard=turn is not None,
+                line=turn.id if turn is not None else 0,
                 line_text=turn.text if turn is not None else "",
             )
         )

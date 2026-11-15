@@ -62,7 +62,7 @@
 
       <div id="note-empty" class="empty">
         <p><strong>The note appears here.</strong> It has the patient's report, your findings, your assessment and plan, and a handoff summary.</p>
-        <p>Every medication is checked against the recording and flagged for you to verify.</p>
+        <p>Every medication and allergy is checked against the recording and flagged for you to verify.</p>
       </div>
 
       <article id="note" class="note" hidden>
@@ -80,7 +80,16 @@
         <section><h4>Objective</h4><ul id="n-objective" contenteditable="true" spellcheck="false"></ul></section>
         <section><h4>Assessment</h4><ul id="n-assessment" contenteditable="true" spellcheck="false"></ul></section>
         <section><h4>Plan</h4><ul id="n-plan" contenteditable="true" spellcheck="false"></ul></section>
-        <section><h4>Allergies</h4><ul id="n-allergies" contenteditable="true" spellcheck="false"></ul></section>
+        <section>
+          <h4>Allergies</h4>
+          <div class="table-wrap">
+            <table id="allergies">
+              <thead><tr><th scope="col">Allergy</th><th scope="col">Checked against recording</th><th scope="col">Verified</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="allergies-none" class="muted" hidden>No allergies were mentioned.</p>
+        </section>
 
         <section>
           <h4>Medications</h4>

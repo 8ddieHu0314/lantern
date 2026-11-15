@@ -26,6 +26,7 @@ from pipeline import (
     Segment,
     Turn,
     assign_roles,
+    check_allergies,
     check_medications,
     format_transcript,
     merge_turns,
@@ -135,6 +136,7 @@ async def note(body: NoteRequest, request: Request):
             "handoff": str(raw.get("handoff") or "").strip(),
         },
         "medications": check_medications(_medications(raw.get("medications")), body.turns),
+        "allergies": check_allergies(_strings(raw.get("allergies")), body.turns),
         "seconds": round(time.monotonic() - started, 1),
     }
 
