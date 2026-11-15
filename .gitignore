@@ -1,0 +1,13 @@
+# Model weights are downloaded by scripts/setup.sh, never committed
+models/
+.venv/
+speech/.build/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+# Secrets and local settings
+.env
+.env.*
+# Saved visits can hold patient audio and notes
+data/
