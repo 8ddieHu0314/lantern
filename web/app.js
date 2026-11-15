@@ -1,49 +1,52 @@
-// Lantern UI: record a visit, show who said what, show the drafted note.
+// Lantern UI: record a visit, show who said what, show the drafted note, keep every note of the outage.
 // No libraries and no network calls beyond this laptop.
 
 const $ = (id) => document.getElementById(id);
 
-// The sections of the note whose sentences each link back to the recording.
 const SECTIONS = ["subjective", "objective", "assessment", "plan"];
+const WAIT_HINT = "The note opens here when it is ready.";
 
 const state = {
   turns: [],
   roles: {},
   recorder: null,
   audioUrl: null,
-  // The visit on screen: { id, created, audio, audioSaved }. Null until a recording is processed.
-  visit: null,
   tick: null,
   busy: false,
+  view: "empty",
+  visit: null, // the visit on screen: { id, created, note, sources, medications, allergies }
+  visits: [], // what the saved visits list shows
 };
 
-// ---------- status ----------
+// ---------- views and messages ----------
 
-function setPill(el, label, kind) {
-  el.textContent = label;
-  el.className = `pill ${kind}`;
+// The main area shows one thing at a time: nothing yet, recording or waiting, or a note.
+function setView(view) {
+  state.view = view;
+  for (const name of ["empty", "work", "note"]) $(`view-${name}`).hidden = name !== view;
 }
 
-function showNetwork() {
-  if (navigator.onLine) setPill($("st-network"), "Network: online", "");
-  else setPill($("st-network"), "Network: OFF · running locally", "offline");
+// The recording screen, also used while the note is being written.
+function setWork(title, { live = false, hint = "" } = {}) {
+  setView("work");
+  $("view-work").classList.toggle("live", live);
+  $("work-title").textContent = title;
+  $("work-status").textContent = "";
+  $("work-hint").textContent = hint;
+  notice("");
 }
 
-async function checkHealth() {
-  try {
-    const health = await (await fetch("/api/health")).json();
-    setPill($("st-speech"), health.speech ? "Speech: ready" : "Speech: not running", health.speech ? "ok" : "down");
-    setPill($("st-llm"), health.llm ? "Bonsai: ready" : "Bonsai: not running", health.llm ? "ok" : "down");
-  } catch {
-    setPill($("st-speech"), "Speech: unknown", "down");
-    setPill($("st-llm"), "Bonsai: unknown", "down");
-  }
-}
-
-function progress(message, isError = false) {
+function notice(message, isError = false) {
   const el = $("progress");
   el.textContent = message;
   el.classList.toggle("error", isError);
+}
+
+// While recording or waiting, progress is the large line in the middle of the screen.
+// Errors, and anything said while a note is open, go in the bar at the top.
+function progress(message, isError = false) {
+  if (state.view === "work" && !isError) $("work-status").textContent = message;
+  else notice(message, isError);
 }
 
 // Shows "message (12s)" and keeps the seconds ticking until the returned function is called.
@@ -61,6 +64,26 @@ function setBusy(busy) {
   $("sample").disabled = busy;
   $("file").disabled = busy;
   $("swap").disabled = busy;
+}
+
+// Says nothing while everything works. A clinician only needs to hear about it when it doesn't.
+async function checkHealth() {
+  let trouble = "";
+  try {
+    const health = await (await fetch("/api/health")).json();
+    if (!health.speech) trouble = "Lantern can't transcribe recordings right now.";
+    else if (!health.llm) trouble = "Lantern can't draft notes right now.";
+  } catch {
+    trouble = "Lantern isn't responding.";
+  }
+  $("trouble").textContent = trouble ? `${trouble} Restart it with scripts/run_all.sh.` : "";
+}
+
+// The one status always on screen: that nothing here needs the network.
+function showNetwork() {
+  const offline = !navigator.onLine;
+  $("st-network").textContent = offline ? "Network: OFF · running locally" : "Runs on this laptop. Nothing is sent anywhere.";
+  $("st-network").classList.toggle("offline", offline);
 }
 
 // ---------- audio ----------
@@ -101,6 +124,8 @@ async function startRecording() {
     progress("Lantern can't use the microphone. Allow microphone access for this page, then try again.", true);
     return;
   }
+  await flushSave();
+  const started = new Date();
   // The stop handler runs after stopRecording has cleared state.recorder,
   // so it keeps its own references to the recorder, its audio and the stream.
   const recorder = new MediaRecorder(stream);
@@ -109,31 +134,35 @@ async function startRecording() {
   recorder.onstop = async () => {
     stopMeter();
     stream.getTracks().forEach((track) => track.stop());
+    renderVisits();
     const blob = new Blob(chunks, { type: recorder.mimeType });
     if (!blob.size) {
+      setView(state.visit ? "note" : "empty");
       progress("Nothing was recorded. Check the microphone and try again.", true);
       return;
     }
-    await processAudio(await blob.arrayBuffer());
+    await processAudio(await blob.arrayBuffer(), started);
   };
   state.recorder = recorder;
   recorder.start();
   startMeter(stream);
 
-  const started = Date.now();
-  $("timer").classList.add("live");
+  $("timer").textContent = "0:00";
   state.tick = setInterval(() => {
-    const s = Math.floor((Date.now() - started) / 1000);
-    $("timer").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    $("timer").textContent = clock((Date.now() - started.getTime()) / 1000);
   }, 250);
   $("record").textContent = "Stop and write note";
   $("record").classList.add("recording");
-  progress("Recording. Talk as usual.");
+  setWork("Recording", {
+    live: true,
+    hint: "When you stop, Lantern writes down who said what, then drafts the note. Audio is processed on this laptop and never sent anywhere.",
+  });
+  progress("Talk as usual.");
+  renderVisits();
 }
 
 function stopRecording() {
   clearInterval(state.tick);
-  $("timer").classList.remove("live");
   $("record").textContent = "Start recording";
   $("record").classList.remove("recording");
   state.recorder.stop();
@@ -171,6 +200,15 @@ function stopMeter() {
 const player = new Audio();
 let playTimer = null;
 
+// Takes a blob URL of the recording, or null when a saved visit has none.
+function setAudio(url) {
+  player.pause();
+  if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+  state.audioUrl = url;
+  if (url) player.src = url;
+  else player.removeAttribute("src");
+}
+
 // Playing is off unless the clinician turns it on: a laptop that suddenly talks is
 // unwelcome next to a patient. The choice is remembered in this browser.
 function setSound(on) {
@@ -189,6 +227,11 @@ function playRange(start, end) {
   playTimer = setTimeout(() => player.pause(), (end + 0.25 - from) * 1000);
 }
 
+function playLine(line) {
+  const turn = state.turns.find((t) => t.id === line);
+  if (turn) playRange(turn.start, turn.end);
+}
+
 // ---------- pipeline ----------
 
 async function api(path, options) {
@@ -201,15 +244,16 @@ async function api(path, options) {
   return response.json();
 }
 
-async function processAudio(arrayBuffer) {
+async function processAudio(arrayBuffer, started = new Date()) {
+  await flushSave();
   setBusy(true);
+  state.visit = null;
+  renderVisits();
+  setWork("Writing the note", { hint: WAIT_HINT });
   let stop = progressTimer("Preparing the audio");
   try {
     const wav = await toWav(arrayBuffer);
-    if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
-    state.audioUrl = URL.createObjectURL(wav);
-    player.src = state.audioUrl;
-    state.visit = { id: newVisitId(new Date()), created: new Date().toISOString(), audio: wav, audioSaved: false };
+    setAudio(URL.createObjectURL(wav));
     stop();
     stop = progressTimer("Writing down who said what");
     const result = await api("/api/transcribe", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
@@ -217,31 +261,186 @@ async function processAudio(arrayBuffer) {
     state.turns = result.turns;
     state.roles = result.roles;
     renderTranscript();
-    await writeNote();
+
+    const drafted = await draftNote();
+    state.visit = { id: visitId(started), created: started.toISOString(), ...unverified(drafted) };
+    renderNote(state.visit);
+    await saveVisit();
+    // The recording is saved next to the note, so its lines can still be played after a restart.
+    api(`/api/visits/${state.visit.id}/audio`, { method: "PUT", headers: { "Content-Type": "audio/wav" }, body: wav })
+      .catch((error) => progress(`The recording couldn't be saved: ${error.message}`, true));
   } catch (error) {
     stop();
+    setView("empty");
     progress(`That didn't work: ${error.message}`, true);
   } finally {
     setBusy(false);
   }
 }
 
-async function writeNote() {
-  const stop = progressTimer("Bonsai is drafting the note");
+async function draftNote() {
+  const stop = progressTimer("Drafting the note");
   try {
-    const result = await api("/api/note", {
+    return await api("/api/note", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ turns: state.turns, roles: state.roles }),
     });
+  } finally {
     stop();
-    renderNote({ ...result, created: state.visit?.created });
-    progress(`Note drafted in ${result.seconds}s. Check the medications and allergies, then print.`);
-    await saveVisit();
-  } catch (error) {
-    stop();
-    progress(`The note couldn't be drafted: ${error.message}`, true);
   }
+}
+
+// A fresh draft: nothing in it has been verified by anyone yet.
+function unverified({ note, sources, medications, allergies }) {
+  return {
+    note,
+    sources,
+    medications: medications.map((med) => ({ ...med, verified: false })),
+    allergies: allergies.map((allergy) => ({ ...allergy, verified: false })),
+  };
+}
+
+// ---------- saved visits ----------
+
+// A visit's id is the local time it started, like 20261115-015200.
+function visitId(date) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
+}
+
+function visitTime(visit) {
+  const date = new Date(visit.created);
+  if (!Number.isNaN(date.getTime())) return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${visit.id.slice(9, 11)}:${visit.id.slice(11, 13)}`;
+}
+
+async function loadVisits() {
+  try {
+    state.visits = (await api("/api/visits")).visits;
+  } catch { /* the list stays as it was */ }
+  renderVisits();
+}
+
+function renderVisits() {
+  const items = state.visits.map((visit) => {
+    const current = !state.recorder && state.visit?.id === visit.id;
+    const button = el("button", current ? "visit current" : "visit");
+    button.type = "button";
+    if (current) button.setAttribute("aria-current", "true");
+    const top = el("span", "visit-top");
+    top.append(
+      el("span", "visit-time", visitTime(visit)),
+      visit.to_verify ? el("span", "visit-state todo", `${visit.to_verify} to verify`) : el("span", "visit-state done", "✓ Verified"),
+    );
+    button.append(top, el("span", "visit-title", visit.title));
+    button.addEventListener("click", () => openVisit(visit.id));
+    const item = el("li");
+    item.append(button);
+    if (current) {
+      const remove = el("button", "visit-delete", "Delete this visit");
+      remove.type = "button";
+      remove.addEventListener("click", () => deleteVisit(visit));
+      item.append(remove);
+    }
+    return item;
+  });
+  if (state.recorder) {
+    const row = el("div", "visit current");
+    const top = el("span", "visit-top");
+    top.append(el("span", "visit-time", "Now"), el("span", "visit-state live", "● Recording"));
+    row.append(top, el("span", "visit-title", "New visit"));
+    const item = el("li");
+    item.append(row);
+    items.unshift(item);
+  }
+  $("visits").replaceChildren(...items);
+  $("visits-none").hidden = items.length > 0;
+  $("export").hidden = state.visits.length === 0;
+}
+
+async function openVisit(id) {
+  if (state.busy || state.recorder || state.visit?.id === id) return;
+  await flushSave();
+  try {
+    const record = await api(`/api/visits/${id}`);
+    state.visit = { sources: {}, medications: [], allergies: [], ...record, id };
+    state.turns = record.turns || [];
+    state.roles = record.roles || {};
+    const audio = await fetch(`/api/visits/${id}/audio`);
+    setAudio(audio.ok ? URL.createObjectURL(await audio.blob()) : null);
+    renderTranscript();
+    renderNote(state.visit);
+    notice("");
+  } catch (error) {
+    progress(`That visit couldn't be opened: ${error.message}`, true);
+  }
+  renderVisits();
+}
+
+async function deleteVisit(visit) {
+  const question = `Delete "${visit.title}" from ${visitTime(visit)}? The note and its recording are removed from this laptop and cannot be recovered.`;
+  if (state.busy || !confirm(question)) return;
+  // Drop any pending save first, so it cannot bring the visit back.
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try {
+    await api(`/api/visits/${visit.id}`, { method: "DELETE" });
+    if (state.visit?.id === visit.id) {
+      state.visit = null;
+      setAudio(null);
+      setView("empty");
+      notice("");
+    }
+  } catch (error) {
+    progress(`That visit couldn't be deleted: ${error.message}`, true);
+  }
+  await loadVisits();
+}
+
+// Reads the note back off the page, so edits and ticks are what gets saved.
+function collect() {
+  const visit = state.visit;
+  visit.note.chief_complaint = $("n-cc").textContent.trim();
+  visit.note.handoff = $("n-handoff").textContent.trim();
+  for (const section of SECTIONS) {
+    const rows = [...$(`n-${section}`).children];
+    visit.note[section] = rows.map((row) => row.querySelector(".say").textContent.trim());
+    visit.sources[section] = rows.map((row) => row.source);
+  }
+  for (const row of document.querySelectorAll(".check-row")) {
+    row.item.verified = row.querySelector("input").checked;
+    if (row.nameEl.isContentEditable) row.item.name = row.nameEl.textContent.trim();
+  }
+  visit.note.allergies = visit.allergies.map((allergy) => allergy.name);
+  visit.turns = state.turns;
+  visit.roles = state.roles;
+  visit.text = noteAsText();
+}
+
+async function saveVisit() {
+  if (!state.visit) return;
+  collect();
+  const { id, ...record } = state.visit;
+  try {
+    await api(`/api/visits/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record) });
+    await loadVisits();
+  } catch (error) {
+    progress(`This note isn't saved yet: ${error.message}`, true);
+  }
+}
+
+// Every edit and every tick is saved shortly after it is made.
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { saveTimer = null; saveVisit(); }, 500);
+}
+async function flushSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await saveVisit();
 }
 
 // ---------- rendering ----------
@@ -256,6 +455,11 @@ function el(tag, className, text) {
 function clock(seconds) {
   const s = Math.floor(seconds);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function setTab(tab) {
+  $("note-col").dataset.tab = tab;
+  for (const name of ["note", "transcript"]) $(`tab-${name}`).setAttribute("aria-selected", String(name === tab));
 }
 
 function renderTranscript() {
@@ -279,34 +483,35 @@ function renderTranscript() {
       text.append(phrase, index < parts.length - 1 ? " " : "");
     });
 
-    item.append(num, el("span", "role", role), text);
+    const said = el("div");
+    said.append(el("span", "role", role), text);
+    item.append(num, said);
     list.append(item);
   }
-  $("transcript-empty").hidden = true;
-  $("transcript-wrap").hidden = false;
 }
 
 // One sentence per row: the editable text, then where in the recording it came from.
-function fillList(id, items, sources = []) {
+function fillList(id, items = [], sources = []) {
   const list = $(id);
   list.replaceChildren(...items.map((item, index) => {
     const row = el("li");
+    row.source = sources[index] ?? null;
     const say = el("span", "say", item);
     say.contentEditable = "true";
     say.spellcheck = false;
     // Clearing a sentence removes it, which is how a line with no source gets dismissed.
     say.addEventListener("blur", () => {
       if (!say.textContent.trim()) { row.remove(); updateBanner(); }
+      scheduleSave();
     });
-    row.source = sources[index];
-    row.append(say, " ", sourceChip(sources[index]));
+    row.append(say, " ", sourceChip(row.source));
     return row;
   }));
 }
 
 function sourceChip(source) {
   if (!source) return "";
-  if (!source.line) return el("span", "check unheard", "Not found in recording");
+  if (!source.line) return el("span", "check unheard", "✕ No source found");
   const chip = el("button", "src", `line ${source.line}`);
   chip.type = "button";
   chip.title = `Heard: "${source.quote}"`;
@@ -315,10 +520,9 @@ function sourceChip(source) {
   return chip;
 }
 
-// Scrolls to the line and lights up the exact phrase. Plays it too if audio is switched on.
+// Opens the transcript at the line and lights up the exact phrase. Plays it too if audio is switched on.
 function showSource(source) {
   goToLine(source.line);
-  document.querySelectorAll(".part.lit").forEach((part) => part.classList.remove("lit"));
   const turn = $(`turn-${source.line}`);
   for (const part of turn ? turn.querySelectorAll(".part") : []) {
     const start = Number(part.dataset.start);
@@ -328,111 +532,122 @@ function showSource(source) {
 }
 
 function goToLine(line) {
+  setTab("transcript");
+  document.querySelectorAll(".part.lit").forEach((part) => part.classList.remove("lit"));
+  document.querySelectorAll(".turn.flash").forEach((turn) => turn.classList.remove("flash"));
   const turn = $(`turn-${line}`);
   if (!turn) return;
   turn.scrollIntoView({ behavior: "smooth", block: "center" });
   turn.classList.add("flash");
-  setTimeout(() => turn.classList.remove("flash"), 1800);
 }
 
 // Counts the medications and allergies nobody has ticked as verified yet.
 function updateBanner() {
   const kinds = [
-    { table: "meds", one: "medication", many: "medications" },
-    { table: "allergies", one: "allergy", many: "allergies" },
+    { list: "meds", one: "medication", many: "medications" },
+    { list: "allergies", one: "allergy", many: "allergies" },
   ].map((kind) => {
-    const boxes = [...document.querySelectorAll(`#${kind.table} tbody input`)];
+    const boxes = [...document.querySelectorAll(`#${kind.list} input`)];
     return { ...kind, total: boxes.length, left: boxes.filter((box) => !box.checked).length };
   }).filter((kind) => kind.total);
 
   const waiting = kinds.filter((kind) => kind.left);
+  const left = waiting.reduce((sum, kind) => sum + kind.left, 0);
   // A "not found" mark stops counting once its row is ticked as verified.
-  const unheard = [...document.querySelectorAll("#note .check.unheard")]
-    .filter((mark) => !mark.closest("tr")?.querySelector("input").checked).length;
+  const unheard = [...document.querySelectorAll("#view-note .check.unheard")]
+    .filter((mark) => !mark.closest(".check-row")?.querySelector("input").checked).length;
 
   const banner = $("med-banner");
   banner.hidden = kinds.length === 0 && unheard === 0;
-  banner.className = unheard ? "banner alert" : waiting.length ? "banner" : "banner clear";
-  const lines = [];
-  if (waiting.length) {
+  banner.className = left ? "banner" : "banner clear";
+  $("banner-count").textContent = left || "✓";
+  if (left) {
     const counts = waiting.map((kind) => `${kind.left} ${kind.left === 1 ? kind.one : kind.many}`);
-    lines.push(`${counts.join(" and ")} to verify before this note is used.`);
-  } else if (kinds.length) lines.push(`All ${kinds.map((kind) => kind.many).join(" and ")} verified.`);
-  if (unheard) lines.push("Some details were not found in the recording.");
-  banner.textContent = lines.join(" ");
+    $("banner-text").textContent = `${counts.join(" and ")} to verify before this note is used.`;
+  } else if (kinds.length) {
+    $("banner-text").textContent = `All ${kinds.map((kind) => kind.many).join(" and ")} verified.`;
+  } else {
+    $("banner-text").textContent = "No medications or allergies to verify.";
+  }
+  $("banner-unheard").hidden = !unheard;
+  $("banner-unheard").textContent = `✕ ${unheard} ${unheard === 1 ? "detail was" : "details were"} not found in the recording.`;
 }
 
-function checkPill(heard, label) {
-  return el("span", `check ${heard ? "heard" : "unheard"}`, heard ? `${label} heard` : `${label} not heard`);
+function mark(heard, label) {
+  return el("span", `check ${heard ? "heard" : "unheard"}`, heard ? `✓ ${label} heard` : `✕ ${label} not heard`);
 }
 
 function lineLink(line) {
   const link = el("button", "line-link", `line ${line}`);
   link.type = "button";
-  link.addEventListener("click", () => goToLine(line));
+  link.setAttribute("aria-label", `Show line ${line}`);
+  link.addEventListener("click", () => { goToLine(line); playLine(line); });
   return link;
 }
 
-// The "Verified" checkbox cell that ends every medication and allergy row.
-function verifyCell(name, verified) {
-  const cell = el("td");
+// One allergy or medication: the box to tick, its name, and what the recording says about it.
+function checkRow(item, label, marks) {
+  const row = el("li", "check-row");
+  row.item = item;
+  row.nameEl = label.querySelector(".check-name");
+
   const box = el("input");
   box.type = "checkbox";
-  box.checked = Boolean(verified);
-  box.setAttribute("aria-label", `Verified ${name}`);
-  box.addEventListener("change", updateBanner);
-  cell.append(box);
-  return cell;
+  box.checked = Boolean(item.verified);
+  box.setAttribute("aria-label", `Verified ${item.name}`);
+
+  const status = el("span", "check-state");
+  const top = el("div", "check-top");
+  top.append(label, status);
+  const evidence = el("p", "check-evidence");
+  evidence.append(...marks);
+  if (item.line) evidence.append(lineLink(item.line));
+  if (item.line_text) evidence.append(el("span", "quote", `“${item.line_text}”`));
+  const main = el("div");
+  main.append(top, evidence);
+
+  const show = () => {
+    row.classList.toggle("verified", box.checked);
+    status.textContent = box.checked ? "Verified" : "Not yet verified";
+  };
+  box.addEventListener("change", () => { show(); updateBanner(); scheduleSave(); });
+  show();
+  row.append(box, main);
+  return row;
 }
 
-// Draws a note: a fresh one from /api/note, or a saved one with its edits and ticks.
-function renderNote({ note, medications, allergies, sources = {}, created }) {
+function renderNote({ created, note, medications, allergies, sources }) {
   $("n-cc").textContent = note.chief_complaint || "Visit note";
-  $("n-date").textContent = new Date(created || Date.now()).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-  for (const section of SECTIONS) fillList(`n-${section}`, note[section] || [], sources[section]);
+  $("n-date").textContent = new Date(created).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  for (const section of SECTIONS) fillList(`n-${section}`, note[section], sources[section]);
   $("n-handoff").textContent = note.handoff;
 
-  const allergyRows = document.querySelector("#allergies tbody");
-  allergyRows.replaceChildren();
-  for (const allergy of allergies) {
-    const row = el("tr");
-    const name = el("td", "", allergy.name);
+  $("allergies").replaceChildren(...allergies.map((allergy) => {
+    const label = el("span");
+    const name = el("strong", "check-name", allergy.name);
     name.contentEditable = "true";
     name.spellcheck = false;
-    const checks = el("td");
-    checks.append(checkPill(allergy.heard, "Allergy"));
-    if (allergy.line) checks.append(lineLink(allergy.line));
-    row.item = allergy;
-    row.append(name, checks, verifyCell(allergy.name, allergy.verified));
-    allergyRows.append(row);
-  }
+    name.addEventListener("blur", scheduleSave);
+    label.append(name);
+    return checkRow(allergy, label, [mark(allergy.heard, "Allergy")]);
+  }));
   $("allergies").hidden = allergies.length === 0;
   $("allergies-none").hidden = allergies.length !== 0;
 
-  const body = document.querySelector("#meds tbody");
-  body.replaceChildren();
-  for (const med of medications) {
-    const row = el("tr");
-    row.append(el("td", "", med.name));
-    row.append(el("td", "", med.dose || "none said"));
-
-    const checks = el("td");
-    checks.append(checkPill(med.name_heard, "Drug"));
-    if (!med.dose) checks.append(el("span", "check nodose", "No dose said"));
-    else checks.append(checkPill(med.dose_heard, "Dose"));
-    if (med.line) checks.append(lineLink(med.line));
-    row.item = med;
-    row.append(checks, verifyCell(med.name, med.verified));
-    body.append(row);
-  }
-  document.querySelector("#meds").hidden = medications.length === 0;
+  $("meds").replaceChildren(...medications.map((med) => {
+    const label = el("span");
+    label.append(el("strong", "check-name", med.name), med.dose ? `, ${med.dose}` : "");
+    const marks = [mark(med.name_heard, "Drug")];
+    marks.push(med.dose ? mark(med.dose_heard, "Dose") : el("span", "check nodose", "No dose said"));
+    return checkRow(med, label, marks);
+  }));
+  $("meds").hidden = medications.length === 0;
   $("meds-none").hidden = medications.length !== 0;
-  updateBanner();
 
-  $("note-empty").hidden = true;
-  $("note").hidden = false;
-  $("print").disabled = false;
-  $("copy").disabled = false;
+  updateBanner();
+  setTab("note");
+  setView("note");
+  notice("");
 }
 
 function noteAsText() {
@@ -440,12 +655,11 @@ function noteAsText() {
     .map((li) => `- ${li.querySelector(".say").textContent}${li.querySelector(".unheard") ? " (NOT found in recording)" : ""}`)
     .join("\n") || "- Nothing was said.";
   const verified = (row) => (row.querySelector("input").checked ? " (verified)" : " (NOT verified)");
-  const meds = [...document.querySelectorAll("#meds tbody tr")].map((row) => {
-    const [name, dose] = [...row.children].map((cell) => cell.textContent);
-    return `- ${name}, ${dose}${verified(row)}`;
-  }).join("\n") || "- None mentioned.";
-  const allergies = [...document.querySelectorAll("#allergies tbody tr")]
-    .map((row) => `- ${row.children[0].textContent}${verified(row)}`)
+  const meds = [...$("meds").children]
+    .map((row) => `- ${row.item.name}, ${row.item.dose || "none said"}${verified(row)}`)
+    .join("\n") || "- None mentioned.";
+  const allergies = [...$("allergies").children]
+    .map((row) => `- ${row.nameEl.textContent.trim()}${verified(row)}`)
     .join("\n") || "- None mentioned.";
   return [
     `DOWNTIME CLINICAL NOTE (draft) · ${$("n-date").textContent}`,
@@ -460,131 +674,7 @@ function noteAsText() {
   ].join("\n");
 }
 
-// ---------- saved visits ----------
-
-// A visit's id is the local time it started, like 20261115-015200.
-function newVisitId(date) {
-  const two = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`
-    + `-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
-}
-
-// The note as it stands on screen, edits and ticks included, in the shape renderNote reads.
-function snapshot() {
-  const note = { chief_complaint: $("n-cc").textContent, handoff: $("n-handoff").textContent };
-  const sources = {};
-  for (const section of SECTIONS) {
-    const rows = [...$(`n-${section}`).querySelectorAll("li")];
-    note[section] = rows.map((row) => row.querySelector(".say").textContent);
-    sources[section] = rows.map((row) => row.source);
-  }
-  const rows = (table) => [...document.querySelectorAll(`#${table} tbody tr`)];
-  const verified = (row) => row.querySelector("input").checked;
-  return {
-    note,
-    sources,
-    medications: rows("meds").map((row) => ({ ...row.item, verified: verified(row) })),
-    allergies: rows("allergies").map((row) => ({ ...row.item, name: row.children[0].textContent, verified: verified(row) })),
-  };
-}
-
-// Writes the visit on screen to this laptop's disk. The recording is sent once, the note every time.
-async function saveVisit() {
-  const visit = state.visit;
-  if (!visit || $("note").hidden) return;
-  try {
-    if (!visit.audioSaved && visit.audio) {
-      await api(`/api/visits/${visit.id}/audio`, { method: "PUT", headers: { "Content-Type": "audio/wav" }, body: visit.audio });
-      visit.audioSaved = true;
-    }
-    await api(`/api/visits/${visit.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ created: visit.created, turns: state.turns, roles: state.roles, ...snapshot(), text: noteAsText() }),
-    });
-    refreshVisits();
-  } catch (error) {
-    progress(`This visit could not be saved: ${error.message}`, true);
-  }
-}
-
-let saveTimer = null;
-function scheduleSave() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveVisit, 400);
-}
-
-const timeOf = (visit) => (visit.created ? new Date(visit.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "");
-
-async function refreshVisits() {
-  let visits;
-  try { visits = (await api("/api/visits")).visits; } catch { return; }
-  $("visits-open").textContent = visits.length ? `Saved visits (${visits.length})` : "Saved visits";
-  $("visits-none").hidden = visits.length !== 0;
-  $("visits-export").hidden = visits.length === 0;
-  $("visits-list").replaceChildren(...visits.map((visit) => {
-    const open = el("button", "visit-open");
-    open.type = "button";
-    open.append(
-      el("span", "visit-time", timeOf(visit)),
-      el("span", "visit-title", visit.title),
-      el("span", `check ${visit.to_verify ? "nodose" : "heard"}`, visit.to_verify ? `${visit.to_verify} to verify` : "Verified"),
-      el("span", "visit-handoff", visit.handoff),
-    );
-    open.addEventListener("click", () => openVisit(visit));
-
-    const remove = el("button", "btn small", "Delete");
-    remove.type = "button";
-    remove.setAttribute("aria-label", `Delete the visit from ${timeOf(visit)}: ${visit.title}`);
-    remove.addEventListener("click", () => deleteVisit(visit));
-
-    const row = el("li", "visit-row");
-    row.append(open, remove);
-    return row;
-  }));
-}
-
-async function openVisit(visit) {
-  if (state.busy || state.recorder) return;
-  try {
-    const record = await api(`/api/visits/${visit.id}`);
-    const audio = await fetch(`/api/visits/${visit.id}/audio`);
-    if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
-    state.audioUrl = audio.ok ? URL.createObjectURL(await audio.blob()) : null;
-    if (state.audioUrl) player.src = state.audioUrl;
-    state.turns = record.turns || [];
-    state.roles = record.roles || {};
-    state.visit = { id: visit.id, created: record.created, audio: null, audioSaved: true };
-    renderTranscript();
-    renderNote(record);
-    $("visits").close();
-    progress(`Opened the saved visit from ${timeOf(visit)}.`);
-  } catch (error) {
-    progress(`That visit could not be opened: ${error.message}`, true);
-  }
-}
-
-async function deleteVisit(visit) {
-  const question = `Delete "${visit.title}" from ${timeOf(visit)}? The note and its recording are removed from this laptop and cannot be recovered.`;
-  if (!confirm(question)) return;
-  try {
-    await api(`/api/visits/${visit.id}`, { method: "DELETE" });
-    // If it is the visit on screen, forget it, so the next autosave does not bring it back.
-    if (state.visit?.id === visit.id) state.visit = null;
-    refreshVisits();
-  } catch (error) {
-    progress(`That visit could not be deleted: ${error.message}`, true);
-  }
-}
-
 // ---------- wiring ----------
-
-// Save again whenever a tick changes or an edited field loses focus.
-$("note").addEventListener("change", scheduleSave);
-$("note").addEventListener("focusout", scheduleSave);
-$("visits-open").addEventListener("click", () => { refreshVisits(); $("visits").showModal(); });
-$("visits-close").addEventListener("click", () => $("visits").close());
-$("sound").addEventListener("change", (event) => setSound(event.target.checked));
 
 $("record").addEventListener("click", () => (state.recorder ? stopRecording() : startRecording()));
 
@@ -599,16 +689,37 @@ $("sample").addEventListener("click", async () => {
   await processAudio(await response.arrayBuffer());
 });
 
+$("tab-note").addEventListener("click", () => setTab("note"));
+$("tab-transcript").addEventListener("click", () => setTab("transcript"));
+
 $("swap").addEventListener("click", async () => {
   for (const speaker of Object.keys(state.roles)) {
     if (state.roles[speaker] === "clinician") state.roles[speaker] = "patient";
     else if (state.roles[speaker] === "patient") state.roles[speaker] = "clinician";
   }
   renderTranscript();
+  clearTimeout(saveTimer);
+  saveTimer = null;
   setBusy(true);
-  await writeNote();
-  setBusy(false);
+  setWork("Writing the note", { hint: WAIT_HINT });
+  try {
+    // A redrafted note has to be verified again.
+    Object.assign(state.visit, unverified(await draftNote()));
+    renderNote(state.visit);
+    setTab("transcript");
+    await saveVisit();
+  } catch (error) {
+    setView("note");
+    progress(`The note couldn't be drafted: ${error.message}`, true);
+  } finally {
+    setBusy(false);
+  }
 });
+
+$("n-cc").addEventListener("blur", scheduleSave);
+$("n-handoff").addEventListener("blur", scheduleSave);
+
+$("sound").addEventListener("change", (event) => setSound(event.target.checked));
 
 $("print").addEventListener("click", () => window.print());
 
@@ -616,6 +727,7 @@ $("copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(noteAsText());
     progress("Note copied as text.");
+    setTimeout(() => { if ($("progress").textContent === "Note copied as text.") notice(""); }, 4000);
   } catch {
     progress("Copying was blocked by the browser. Select the note and copy it by hand.", true);
   }
@@ -624,10 +736,11 @@ $("copy").addEventListener("click", async () => {
 window.addEventListener("online", showNetwork);
 window.addEventListener("offline", showNetwork);
 showNetwork();
-checkHealth();
-refreshVisits();
 let soundChoice = null;
 try { soundChoice = localStorage.getItem("lantern.sound"); } catch { /* private window */ }
 setSound(soundChoice === "on");
+
+checkHealth();
 setInterval(checkHealth, 5000);
+loadVisits();
 fetch("sample-visit.wav", { method: "HEAD" }).then((r) => { $("sample").hidden = !r.ok; }).catch(() => {});

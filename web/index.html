@@ -7,127 +7,119 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <h1>Lantern</h1>
-      <p>For when the hospital goes dark.</p>
-    </div>
-    <div class="top-right">
-      <ul class="status" aria-label="System status">
-        <li id="st-network" class="pill">Network: checking</li>
-        <li id="st-speech" class="pill">Speech: checking</li>
-        <li id="st-llm" class="pill">Bonsai: checking</li>
-      </ul>
-      <button id="visits-open" class="btn small" type="button">Saved visits</button>
-    </div>
-  </header>
-
-  <main class="columns">
-    <section class="panel visit" aria-labelledby="visit-h">
-      <div class="panel-head">
-        <h2 id="visit-h">Visit</h2>
-        <span id="timer" class="timer" aria-live="off">0:00</span>
+  <div class="app">
+    <aside class="rail">
+      <div class="brand">
+        <h1>Lantern</h1>
+        <p id="st-network" class="net"></p>
       </div>
 
-      <div class="controls">
-        <button id="record" class="btn primary" type="button">Start recording</button>
-        <button id="sample" class="btn" type="button" hidden>Use sample visit</button>
-        <label class="btn file">
-          Open audio file
-          <input id="file" type="file" accept="audio/*">
-        </label>
+      <div class="visit-controls">
+        <button id="record" class="btn primary record" type="button">Start recording</button>
+        <div class="controls">
+          <button id="sample" class="btn" type="button" hidden>Use sample visit</button>
+          <label class="btn file">
+            Open audio file
+            <input id="file" type="file" accept="audio/*">
+          </label>
+        </div>
       </div>
-      <div class="meter" aria-hidden="true"><div id="level"></div></div>
-      <p id="progress" class="progress" role="status" aria-live="polite"></p>
 
-      <div id="transcript-empty" class="empty">
-        <p><strong>No visit yet.</strong> Press Start recording and talk as usual. When you stop, Lantern writes down who said what, then drafts the note.</p>
+      <nav class="saved" aria-labelledby="visits-h">
+        <h2 id="visits-h">Saved visits</h2>
+        <ol id="visits" class="visits"></ol>
+        <p id="visits-none" class="muted">Notes from this outage are kept here.</p>
+      </nav>
+
+      <a id="export" class="btn" href="/api/visits/export.txt" download hidden>Export all</a>
+    </aside>
+
+    <main>
+      <p id="trouble" class="notice error" role="alert"></p>
+      <p id="progress" class="notice" role="status" aria-live="polite"></p>
+
+      <section id="view-empty" class="empty">
+        <h2>No visit yet.</h2>
+        <p>Press Start recording and talk as usual. When you stop, Lantern writes down who said what, then drafts the note.</p>
+        <p>Every line of the note links to the moment in the recording it came from. Every medication and allergy is checked against the recording and flagged for you to verify.</p>
         <p>Audio is processed on this laptop and never sent anywhere.</p>
-      </div>
+      </section>
 
-      <div id="transcript-wrap" hidden>
-        <div class="transcript-head">
-          <h3>Transcript</h3>
-          <label class="toggle"><input id="sound" type="checkbox"> Play audio on click</label>
-          <button id="swap" class="btn small" type="button">Swap clinician and patient</button>
+      <section id="view-work" class="work" hidden>
+        <p id="work-title" class="work-title">Recording</p>
+        <p id="timer" class="timer" aria-live="off">0:00</p>
+        <div class="meter-wrap" aria-hidden="true">
+          <span>Sound level</span>
+          <div class="meter"><div id="level"></div></div>
         </div>
-        <ol id="transcript" class="transcript"></ol>
-      </div>
-    </section>
+        <p id="work-status" class="work-status" role="status" aria-live="polite"></p>
+        <p id="work-hint" class="work-hint"></p>
+      </section>
 
-    <section class="panel note-panel" aria-labelledby="note-h">
-      <div class="panel-head no-print">
-        <h2 id="note-h">Note</h2>
-        <div class="note-actions">
-          <button id="copy" class="btn small" type="button" disabled>Copy text</button>
-          <button id="print" class="btn small primary" type="button" disabled>Print</button>
-        </div>
-      </div>
-
-      <div id="note-empty" class="empty">
-        <p><strong>The note appears here.</strong> It has the patient's report, your findings, your assessment and plan, and a handoff summary.</p>
-        <p>Every line links to the moment in the recording it came from. Every medication and allergy is checked against the recording and flagged for you to verify.</p>
-      </div>
-
-      <article id="note" class="note" hidden>
-        <header class="sheet-head">
+      <article id="view-note" class="note" hidden>
+        <header class="note-head">
           <div>
-            <p class="sheet-kicker">Downtime clinical note · Draft</p>
-            <h3 id="n-cc" contenteditable="true" spellcheck="false"></h3>
+            <h2 id="n-cc" contenteditable="true" spellcheck="false"></h2>
+            <p class="sheet-kicker">Downtime clinical note · Draft · <span id="n-date"></span></p>
           </div>
-          <p id="n-date" class="sheet-date"></p>
+          <div class="note-actions no-print">
+            <button id="copy" class="btn" type="button">Copy text</button>
+            <button id="print" class="btn primary" type="button">Print</button>
+          </div>
         </header>
 
-        <div id="med-banner" class="banner" hidden></div>
+        <div class="note-body">
+          <div id="note-col" class="note-col" data-tab="note">
+            <div class="tab-row no-print">
+              <div class="tabs" role="tablist" aria-label="Note or transcript">
+                <button id="tab-note" type="button" role="tab" aria-selected="true" aria-controls="pane-note">Note</button>
+                <button id="tab-transcript" type="button" role="tab" aria-selected="false" aria-controls="pane-transcript">Transcript</button>
+              </div>
+              <div class="tab-tools">
+                <label class="toggle"><input id="sound" type="checkbox"> Play audio on click</label>
+                <button id="swap" class="btn small" type="button">Swap clinician and patient</button>
+              </div>
+            </div>
 
-        <section><h4>Subjective</h4><ul id="n-subjective"></ul></section>
-        <section><h4>Objective</h4><ul id="n-objective"></ul></section>
-        <section><h4>Assessment</h4><ul id="n-assessment"></ul></section>
-        <section><h4>Plan</h4><ul id="n-plan"></ul></section>
-        <section>
-          <h4>Allergies</h4>
-          <div class="table-wrap">
-            <table id="allergies">
-              <thead><tr><th scope="col">Allergy</th><th scope="col">Checked against recording</th><th scope="col">Verified</th></tr></thead>
-              <tbody></tbody>
-            </table>
+            <div id="pane-note" role="tabpanel" aria-labelledby="tab-note">
+              <section class="section"><h3>Subjective</h3><ul id="n-subjective"></ul></section>
+              <section class="section"><h3>Objective</h3><ul id="n-objective"></ul></section>
+              <section class="section"><h3>Assessment</h3><ul id="n-assessment"></ul></section>
+              <section class="section"><h3>Plan</h3><ul id="n-plan"></ul></section>
+              <section class="section handoff"><h3>Handoff</h3><p id="n-handoff" contenteditable="true" spellcheck="false"></p></section>
+            </div>
+
+            <div id="pane-transcript" role="tabpanel" aria-labelledby="tab-transcript">
+              <ol id="transcript" class="transcript"></ol>
+            </div>
           </div>
-          <p id="allergies-none" class="muted" hidden>No allergies were mentioned.</p>
-        </section>
 
-        <section>
-          <h4>Medications</h4>
-          <div class="table-wrap">
-            <table id="meds">
-              <thead><tr><th scope="col">Drug</th><th scope="col">Dose</th><th scope="col">Checked against recording</th><th scope="col">Verified</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <p id="meds-none" class="muted" hidden>No medications were mentioned.</p>
-        </section>
-
-        <section><h4>Handoff</h4><p id="n-handoff" contenteditable="true" spellcheck="false"></p></section>
+          <section class="verify" aria-label="Verify before use">
+            <div id="med-banner" class="banner" hidden>
+              <span id="banner-count" class="banner-count"></span>
+              <div class="banner-lines">
+                <strong id="banner-text"></strong>
+                <span id="banner-unheard" class="banner-unheard" hidden></span>
+              </div>
+            </div>
+            <div class="verify-body">
+              <h3>Allergies</h3>
+              <ul id="allergies" class="checks"></ul>
+              <p id="allergies-none" class="muted" hidden>No allergies were mentioned.</p>
+              <h3>Medications</h3>
+              <ul id="meds" class="checks"></ul>
+              <p id="meds-none" class="muted" hidden>No medications were mentioned.</p>
+            </div>
+          </section>
+        </div>
 
         <footer class="sheet-foot">
           <p>Drafted on this device by Lantern from a recording of the visit. Not reviewed until signed.</p>
           <p class="sign">Clinician signature: <span></span> Time: <span class="short"></span></p>
         </footer>
       </article>
-    </section>
-  </main>
-
-  <dialog id="visits" class="visits" aria-labelledby="visits-h">
-    <div class="panel-head">
-      <h2 id="visits-h">Saved visits</h2>
-      <button id="visits-close" class="btn small" type="button">Close</button>
-    </div>
-    <p class="muted">Every note from this outage is kept on this laptop. Export them when the record system is back.</p>
-    <ul id="visits-list" class="visit-list"></ul>
-    <p id="visits-none" class="muted" hidden>No visits saved yet. A visit is saved as soon as its note is drafted.</p>
-    <div class="controls">
-      <a id="visits-export" class="btn primary" href="/api/visits/export.txt" download>Export all as text</a>
-    </div>
-  </dialog>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>
