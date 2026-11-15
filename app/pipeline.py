@@ -201,8 +201,11 @@ def check_medications(medications: list[Medication], turns: list[Turn]) -> list[
     `name_heard` is true when the drug name appears in the cited line (or, if the
     model cited the wrong line, anywhere in the transcript, in which case the line
     is corrected). `dose_heard` is true when every number in the dose was said in
-    that line. A drug or dose that was not heard is exactly what a clinician must
-    catch, so the UI shows it differently from one that was.
+    that line. When no line can be tied to the drug (its name was not heard and
+    the cited line does not exist), the dose is checked against the whole
+    transcript, so a dose that was said is not reported as missing. A drug or
+    dose that was not heard is exactly what a clinician must catch, so the UI
+    shows it differently from one that was.
     """
     by_id = {turn.id: turn for turn in turns}
     checked: list[CheckedMedication] = []
@@ -219,7 +222,9 @@ def check_medications(medications: list[Medication], turns: list[Turn]) -> list[
 
         name_heard = turn is not None and says_name(turn)
         dose_numbers = number_values(med.dose)
-        dose_heard = bool(dose_numbers) and turn is not None and dose_numbers <= number_values(turn.text)
+        searched = [turn] if turn is not None else turns
+        said = {value for t in searched for value in number_values(t.text)}
+        dose_heard = bool(dose_numbers) and dose_numbers <= said
 
         checked.append(
             CheckedMedication(

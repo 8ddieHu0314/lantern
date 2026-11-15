@@ -129,6 +129,19 @@ class CheckMedicationsTest(unittest.TestCase):
         self.assertEqual(result.line, 2)
         self.assertTrue(result.name_heard)
 
+    def test_misheard_drug_with_no_usable_line_still_finds_its_dose(self):
+        # Whisper wrote "imbuprithin 500 mg", the model wrote "ibuprofen" and cited a line that isn't there.
+        turns = merge_turns([seg(0, "I'm giving you imbuprithin 500 mg for the pain.")])
+        result = check_medications([Medication(name="ibuprofen", dose="500 mg", line=7)], turns)[0]
+        self.assertFalse(result.name_heard)
+        self.assertTrue(result.dose_heard)
+        self.assertEqual(result.line, 0)
+
+    def test_unlocated_drug_with_a_dose_nobody_said_is_not_heard(self):
+        result = self.check(name="morphine", dose="5 mg", line=9)
+        self.assertFalse(result.name_heard)
+        self.assertFalse(result.dose_heard)
+
     def test_no_dose_given_means_no_dose_heard(self):
         self.assertFalse(self.check(name="ibuprofen", dose="", line=3).dose_heard)
 
