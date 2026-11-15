@@ -62,4 +62,4 @@ The sample visit in `web/sample-visit.wav` is synthetic speech, not a real patie
 
 ## Team
 
-Eddie Hu and Claudia.
+Eddie Hu and Claudia Wong.
