@@ -139,4 +139,16 @@ async def note(body: NoteRequest, request: Request):
     }
 
 
-app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+class FreshStaticFiles(StaticFiles):
+    """Serves the page with "no-cache", so the browser checks each file is current before using it.
+
+    Without it the browser keeps running an old app.js after the file changes.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", FreshStaticFiles(directory=WEB_DIR, html=True), name="web")
