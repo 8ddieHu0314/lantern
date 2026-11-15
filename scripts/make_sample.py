@@ -19,18 +19,17 @@ import numpy as np
 SPEECH_URL = "http://127.0.0.1:8001"
 OUT = Path(__file__).resolve().parent.parent / "web" / "sample-visit.wav"
 
-CLINICIAN, PATIENT = "aiden", "serena"
+CLINICIAN, PATIENT = "aiden", "vivian"
 
 VISIT = [
-    (CLINICIAN, "Hi, I'm Doctor Hu. What happened this morning?"),
-    (PATIENT, "I slipped on the ice outside my apartment and landed on my right hand. My wrist hurts a lot."),
+    (CLINICIAN, "Hi, what happened this morning?"),
+    (PATIENT, "I fell on the ice outside my apartment and landed on my right hand. My wrist hurts a lot."),
     (CLINICIAN, "Any numbness or tingling in your fingers?"),
     (PATIENT, "A little tingling in my thumb."),
     (CLINICIAN, "Do you take any medication, and do you have any allergies?"),
     (PATIENT, "I take lisinopril, ten milligrams every morning. And I'm allergic to penicillin."),
     (CLINICIAN, "Okay. There's swelling and tenderness over the right wrist. Capillary refill is under two seconds. This looks like a distal radius fracture."),
     (CLINICIAN, "We'll put it in a splint, keep it elevated, and get an x-ray as soon as imaging is back online. I'll give you ibuprofen, four hundred milligrams, for the pain."),
-    (PATIENT, "Okay, thank you."),
 ]
 
 PAUSE_SECONDS = 0.5

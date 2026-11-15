@@ -72,7 +72,8 @@ do not write "no known allergies" unless the patient said they have none.
 - medications: every drug mentioned, whether the patient already takes it or the clinician is \
 giving it. For each: the name, the dose exactly as spoken ("" if no dose was said), and the number \
 of the transcript line where it was said.
-- handoff: two sentences a colleague taking over this patient needs to hear.
+- handoff: two sentences a colleague taking over this patient needs to hear. Here too, write \
+"the patient", never "he" or "she".
 
 Each transcript line starts with its number in brackets, like [4]."""
 
