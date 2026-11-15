@@ -171,8 +171,17 @@ function stopMeter() {
 const player = new Audio();
 let playTimer = null;
 
+// Playing is off unless the clinician turns it on: a laptop that suddenly talks is
+// unwelcome next to a patient. The choice is remembered in this browser.
+function setSound(on) {
+  $("sound").checked = on;
+  document.body.classList.toggle("sound-off", !on);
+  if (!on) player.pause();
+  try { localStorage.setItem("lantern.sound", on ? "on" : "off"); } catch { /* private window: not remembered */ }
+}
+
 function playRange(start, end) {
-  if (!state.audioUrl) return;
+  if (!state.audioUrl || !$("sound").checked) return;
   clearTimeout(playTimer);
   const from = Math.max(0, start - 0.1);
   player.currentTime = from;
@@ -301,12 +310,12 @@ function sourceChip(source) {
   const chip = el("button", "src", `line ${source.line}`);
   chip.type = "button";
   chip.title = `Heard: "${source.quote}"`;
-  chip.setAttribute("aria-label", `Play where this was said, line ${source.line}`);
+  chip.setAttribute("aria-label", `Show where this was said, line ${source.line}`);
   chip.addEventListener("click", () => showSource(source));
   return chip;
 }
 
-// Scrolls to the line, lights up the exact phrase and plays it.
+// Scrolls to the line and lights up the exact phrase. Plays it too if audio is switched on.
 function showSource(source) {
   goToLine(source.line);
   document.querySelectorAll(".part.lit").forEach((part) => part.classList.remove("lit"));
@@ -575,6 +584,7 @@ $("note").addEventListener("change", scheduleSave);
 $("note").addEventListener("focusout", scheduleSave);
 $("visits-open").addEventListener("click", () => { refreshVisits(); $("visits").showModal(); });
 $("visits-close").addEventListener("click", () => $("visits").close());
+$("sound").addEventListener("change", (event) => setSound(event.target.checked));
 
 $("record").addEventListener("click", () => (state.recorder ? stopRecording() : startRecording()));
 
@@ -616,5 +626,8 @@ window.addEventListener("offline", showNetwork);
 showNetwork();
 checkHealth();
 refreshVisits();
+let soundChoice = null;
+try { soundChoice = localStorage.getItem("lantern.sound"); } catch { /* private window */ }
+setSound(soundChoice === "on");
 setInterval(checkHealth, 5000);
 fetch("sample-visit.wav", { method: "HEAD" }).then((r) => { $("sample").hidden = !r.ok; }).catch(() => {});
