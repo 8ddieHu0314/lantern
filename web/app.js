@@ -7,8 +7,6 @@ const state = {
   turns: [],
   roles: {},
   recorder: null,
-  chunks: [],
-  stream: null,
   tick: null,
   busy: false,
 };
@@ -90,23 +88,31 @@ async function toWav(arrayBuffer) {
 }
 
 async function startRecording() {
+  let stream;
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
     progress("Lantern can't use the microphone. Allow microphone access for this page, then try again.", true);
     return;
   }
-  state.chunks = [];
-  state.recorder = new MediaRecorder(state.stream);
-  state.recorder.ondataavailable = (event) => event.data.size && state.chunks.push(event.data);
-  state.recorder.onstop = async () => {
-    const blob = new Blob(state.chunks, { type: state.recorder.mimeType });
+  // The stop handler runs after stopRecording has cleared state.recorder,
+  // so it keeps its own references to the recorder, its audio and the stream.
+  const recorder = new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = (event) => event.data.size && chunks.push(event.data);
+  recorder.onstop = async () => {
     stopMeter();
-    state.stream.getTracks().forEach((track) => track.stop());
+    stream.getTracks().forEach((track) => track.stop());
+    const blob = new Blob(chunks, { type: recorder.mimeType });
+    if (!blob.size) {
+      progress("Nothing was recorded. Check the microphone and try again.", true);
+      return;
+    }
     await processAudio(await blob.arrayBuffer());
   };
-  state.recorder.start();
-  startMeter(state.stream);
+  state.recorder = recorder;
+  recorder.start();
+  startMeter(stream);
 
   const started = Date.now();
   $("timer").classList.add("live");
