@@ -5,12 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lantern</title>
   <link rel="stylesheet" href="style.css">
+  <script>
+    // Before the page draws, so a remembered light or dark choice never flashes the other one.
+    try {
+      const theme = localStorage.getItem("lantern.theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    } catch { /* private window: follow the laptop */ }
+  </script>
 </head>
 <body>
   <div class="app">
     <aside class="rail">
       <div class="brand">
-        <h1>Lantern</h1>
+        <div class="brand-row">
+          <h1>Lantern</h1>
+          <button id="theme" class="btn theme" type="button">Dark mode</button>
+        </div>
         <p id="st-network" class="net"></p>
       </div>
 

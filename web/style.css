@@ -14,13 +14,20 @@
   --patient: #4338c4;
   --body: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+/* Dark follows the laptop, until the Light mode / Dark mode button picks one (data-theme). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --paper: #0c1316; --surface: #131f25; --ink: #e1e9eb; --muted: #94a5ac; --rule: #243439;
     --accent: #4fb5a8; --accent-soft: #12322e; --warn: #e5b65a; --warn-soft: #33290f;
     --alert: #f08a62; --alert-soft: #3a1e13; --patient: #a9abf6;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --paper: #0c1316; --surface: #131f25; --ink: #e1e9eb; --muted: #94a5ac; --rule: #243439;
+  --accent: #4fb5a8; --accent-soft: #12322e; --warn: #e5b65a; --warn-soft: #33290f;
+  --alert: #f08a62; --alert-soft: #3a1e13; --patient: #a9abf6;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -42,6 +49,8 @@ button, input { font: inherit; color: inherit; }
 }
 .rail h1 { font-size: 26px; line-height: 1.2; letter-spacing: -0.01em; }
 .brand { display: flex; flex-direction: column; gap: 4px; }
+.brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.btn.theme { padding: 5px 11px; font-size: 14px; white-space: nowrap; }
 /* The one status always on screen: that nothing here needs the network. */
 .net { font-size: 14px; line-height: 1.35; color: var(--muted); }
 .net.offline { color: var(--accent); font-weight: 650; }
@@ -238,7 +247,8 @@ body:not(.sound-off) .line-link::before { content: "▸ "; }
 /* ---------- print: the note only, black on white, in reading order ---------- */
 
 @media print {
-  :root { --paper: #fff; --surface: #fff; --ink: #000; --muted: #333; --rule: #999; --accent: #000; --accent-soft: #fff; --warn: #000; --warn-soft: #fff; --alert: #000; --alert-soft: #fff; --patient: #000; }
+  /* Paper is always black on white, whichever mode the screen is in. */
+  :root[data-theme], :root:not([data-theme]) { color-scheme: light; --paper: #fff; --surface: #fff; --ink: #000; --muted: #333; --rule: #999; --accent: #000; --accent-soft: #fff; --warn: #000; --warn-soft: #fff; --alert: #000; --alert-soft: #fff; --patient: #000; }
   html, body { height: auto; }
   body { font-size: 12pt; }
   .rail, .no-print, .notice, .src, .line-link, .quote, #pane-transcript { display: none !important; }

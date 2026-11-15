@@ -218,6 +218,24 @@ function setSound(on) {
   try { localStorage.setItem("lantern.sound", on ? "on" : "off"); } catch { /* private window: not remembered */ }
 }
 
+// Light or dark follows the laptop until the clinician picks one. The pick is
+// remembered in this browser. The button names the mode it switches to.
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function currentTheme() {
+  return document.documentElement.dataset.theme || (darkQuery.matches ? "dark" : "light");
+}
+
+function showTheme() {
+  $("theme").textContent = currentTheme() === "dark" ? "Light mode" : "Dark mode";
+}
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem("lantern.theme", theme); } catch { /* private window: not remembered */ }
+  showTheme();
+}
+
 function playRange(start, end) {
   if (!state.audioUrl || !$("sound").checked) return;
   clearTimeout(playTimer);
@@ -721,6 +739,9 @@ $("n-handoff").addEventListener("blur", scheduleSave);
 
 $("sound").addEventListener("change", (event) => setSound(event.target.checked));
 
+$("theme").addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
+darkQuery.addEventListener("change", showTheme);
+
 $("print").addEventListener("click", () => window.print());
 
 $("copy").addEventListener("click", async () => {
@@ -736,6 +757,7 @@ $("copy").addEventListener("click", async () => {
 window.addEventListener("online", showNetwork);
 window.addEventListener("offline", showNetwork);
 showNetwork();
+showTheme();
 let soundChoice = null;
 try { soundChoice = localStorage.getItem("lantern.sound"); } catch { /* private window */ }
 setSound(soundChoice === "on");
