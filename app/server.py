@@ -4,6 +4,10 @@
     GET  /api/health        are the speech service and Bonsai up
     POST /api/transcribe    audio file as the body -> numbered turns with speaker roles
     POST /api/note          turns + roles -> structured note with checked medications
+    GET  /api/visits        the visits saved on this laptop, newest first
+    GET  /api/visits/export.txt             every saved note as one text file
+    GET, PUT, DELETE /api/visits/{id}       one saved visit
+    GET, PUT /api/visits/{id}/audio         its recording
 
 Everything listens on 127.0.0.1 and nothing leaves the laptop.
 """
@@ -12,15 +16,17 @@ from __future__ import annotations
 
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import llm
+from visits import VisitStore
 from pipeline import (
     Medication,
     Segment,
@@ -34,6 +40,8 @@ from pipeline import (
 )
 
 SPEECH_URL = os.environ.get("LANTERN_SPEECH_URL", "http://127.0.0.1:8001")
+DATA_DIR = Path(os.environ.get("LANTERN_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
+store = VisitStore(DATA_DIR / "visits")
 # The sections whose sentences are each traced back to the recording.
 SOURCED_SECTIONS = ("subjective", "objective", "assessment", "plan")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -142,6 +150,65 @@ async def note(body: NoteRequest, request: Request):
         "allergies": check_allergies(_strings(raw.get("allergies")), body.turns),
         "seconds": round(time.monotonic() - started, 1),
     }
+
+
+@contextmanager
+def _visit_errors():
+    """Turn a bad id or a missing visit into a clear answer for the page."""
+    try:
+        yield
+    except ValueError as error:
+        raise HTTPException(400, "That is not a visit id.") from error
+    except KeyError as error:
+        raise HTTPException(404, "That visit is not saved on this laptop.") from error
+
+
+@app.get("/api/visits")
+def list_visits():
+    return {"visits": store.summaries()}
+
+
+@app.get("/api/visits/export.txt")
+def export_visits():
+    name = f"lantern-notes-{time.strftime('%Y%m%d-%H%M')}.txt"
+    return PlainTextResponse(store.export_text(), headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/visits/{visit_id}")
+def get_visit(visit_id: str):
+    with _visit_errors():
+        return store.load(visit_id)
+
+
+@app.put("/api/visits/{visit_id}")
+async def save_visit(visit_id: str, record: dict):
+    with _visit_errors():
+        store.save(visit_id, record)
+    return {"saved": visit_id}
+
+
+@app.delete("/api/visits/{visit_id}")
+def delete_visit(visit_id: str):
+    with _visit_errors():
+        store.delete(visit_id)
+    return {"deleted": visit_id}
+
+
+@app.put("/api/visits/{visit_id}/audio")
+async def save_visit_audio(visit_id: str, request: Request):
+    audio = await request.body()
+    with _visit_errors():
+        store.save_audio(visit_id, audio)
+    return {"saved": visit_id}
+
+
+@app.get("/api/visits/{visit_id}/audio")
+def get_visit_audio(visit_id: str):
+    with _visit_errors():
+        path = store.audio_path(visit_id)
+    if path is None:
+        raise HTTPException(404, "This visit has no recording saved.")
+    return FileResponse(path, media_type="audio/wav")
 
 
 class FreshStaticFiles(StaticFiles):

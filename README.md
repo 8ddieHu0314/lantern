@@ -19,6 +19,8 @@ Built for the Local AI Hackathon at Cornell (theme: Recreate).
 5. **Check every medication and allergy** against the recording. A drug, dose or allergy that was
    not actually said is marked, and each one links to the transcript line it came from.
 6. **Review, edit and print** the note.
+7. **Keep every visit** of the outage on the laptop, with its recording. Reopen any of them, and
+   export all the notes as one text file when the record system is back.
 
 ## How it's built
 
@@ -49,10 +51,10 @@ scripts/setup.sh      # once, online: downloads about 6 GB of models and builds 
 scripts/run_all.sh    # then turn Wi-Fi off if you like, and open http://localhost:8000
 ```
 
-Tests for the transcript and medication logic:
+Tests for the transcript, the safety checks and the saved visits:
 
 ```sh
-cd app && ../.venv/bin/python -m unittest test_pipeline
+cd app && ../.venv/bin/python -m unittest test_pipeline test_visits
 ```
 
 ## Safety
@@ -62,6 +64,9 @@ medication and allergy is flagged until someone ticks it as verified, and the pr
 marked as a draft with a signature line. It is a hackathon prototype and has not been evaluated
 for clinical use.
 The sample visit in `web/sample-visit.wav` is synthetic speech, not a real patient.
+
+Saved visits are written to `data/visits/` on the laptop as plain files, unencrypted. A version
+for real patients would encrypt them and control who can open them.
 
 ## Team
 

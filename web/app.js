@@ -3,11 +3,16 @@
 
 const $ = (id) => document.getElementById(id);
 
+// The sections of the note whose sentences each link back to the recording.
+const SECTIONS = ["subjective", "objective", "assessment", "plan"];
+
 const state = {
   turns: [],
   roles: {},
   recorder: null,
   audioUrl: null,
+  // The visit on screen: { id, created, audio, audioSaved }. Null until a recording is processed.
+  visit: null,
   tick: null,
   busy: false,
 };
@@ -195,6 +200,7 @@ async function processAudio(arrayBuffer) {
     if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
     state.audioUrl = URL.createObjectURL(wav);
     player.src = state.audioUrl;
+    state.visit = { id: newVisitId(new Date()), created: new Date().toISOString(), audio: wav, audioSaved: false };
     stop();
     stop = progressTimer("Writing down who said what");
     const result = await api("/api/transcribe", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
@@ -220,8 +226,9 @@ async function writeNote() {
       body: JSON.stringify({ turns: state.turns, roles: state.roles }),
     });
     stop();
-    renderNote(result);
+    renderNote({ ...result, created: state.visit?.created });
     progress(`Note drafted in ${result.seconds}s. Check the medications and allergies, then print.`);
+    await saveVisit();
   } catch (error) {
     stop();
     progress(`The note couldn't be drafted: ${error.message}`, true);
@@ -282,6 +289,7 @@ function fillList(id, items, sources = []) {
     say.addEventListener("blur", () => {
       if (!say.textContent.trim()) { row.remove(); updateBanner(); }
     });
+    row.source = sources[index];
     row.append(say, " ", sourceChip(sources[index]));
     return row;
   }));
@@ -357,22 +365,22 @@ function lineLink(line) {
 }
 
 // The "Verified" checkbox cell that ends every medication and allergy row.
-function verifyCell(name) {
+function verifyCell(name, verified) {
   const cell = el("td");
   const box = el("input");
   box.type = "checkbox";
+  box.checked = Boolean(verified);
   box.setAttribute("aria-label", `Verified ${name}`);
   box.addEventListener("change", updateBanner);
   cell.append(box);
   return cell;
 }
 
-function renderNote({ note, medications, allergies, sources }) {
+// Draws a note: a fresh one from /api/note, or a saved one with its edits and ticks.
+function renderNote({ note, medications, allergies, sources = {}, created }) {
   $("n-cc").textContent = note.chief_complaint || "Visit note";
-  $("n-date").textContent = new Date().toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-  for (const section of ["subjective", "objective", "assessment", "plan"]) {
-    fillList(`n-${section}`, note[section], sources[section]);
-  }
+  $("n-date").textContent = new Date(created || Date.now()).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  for (const section of SECTIONS) fillList(`n-${section}`, note[section] || [], sources[section]);
   $("n-handoff").textContent = note.handoff;
 
   const allergyRows = document.querySelector("#allergies tbody");
@@ -385,7 +393,8 @@ function renderNote({ note, medications, allergies, sources }) {
     const checks = el("td");
     checks.append(checkPill(allergy.heard, "Allergy"));
     if (allergy.line) checks.append(lineLink(allergy.line));
-    row.append(name, checks, verifyCell(allergy.name));
+    row.item = allergy;
+    row.append(name, checks, verifyCell(allergy.name, allergy.verified));
     allergyRows.append(row);
   }
   $("allergies").hidden = allergies.length === 0;
@@ -403,7 +412,8 @@ function renderNote({ note, medications, allergies, sources }) {
     if (!med.dose) checks.append(el("span", "check nodose", "No dose said"));
     else checks.append(checkPill(med.dose_heard, "Dose"));
     if (med.line) checks.append(lineLink(med.line));
-    row.append(checks, verifyCell(med.name));
+    row.item = med;
+    row.append(checks, verifyCell(med.name, med.verified));
     body.append(row);
   }
   document.querySelector("#meds").hidden = medications.length === 0;
@@ -441,7 +451,130 @@ function noteAsText() {
   ].join("\n");
 }
 
+// ---------- saved visits ----------
+
+// A visit's id is the local time it started, like 20261115-015200.
+function newVisitId(date) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`
+    + `-${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
+}
+
+// The note as it stands on screen, edits and ticks included, in the shape renderNote reads.
+function snapshot() {
+  const note = { chief_complaint: $("n-cc").textContent, handoff: $("n-handoff").textContent };
+  const sources = {};
+  for (const section of SECTIONS) {
+    const rows = [...$(`n-${section}`).querySelectorAll("li")];
+    note[section] = rows.map((row) => row.querySelector(".say").textContent);
+    sources[section] = rows.map((row) => row.source);
+  }
+  const rows = (table) => [...document.querySelectorAll(`#${table} tbody tr`)];
+  const verified = (row) => row.querySelector("input").checked;
+  return {
+    note,
+    sources,
+    medications: rows("meds").map((row) => ({ ...row.item, verified: verified(row) })),
+    allergies: rows("allergies").map((row) => ({ ...row.item, name: row.children[0].textContent, verified: verified(row) })),
+  };
+}
+
+// Writes the visit on screen to this laptop's disk. The recording is sent once, the note every time.
+async function saveVisit() {
+  const visit = state.visit;
+  if (!visit || $("note").hidden) return;
+  try {
+    if (!visit.audioSaved && visit.audio) {
+      await api(`/api/visits/${visit.id}/audio`, { method: "PUT", headers: { "Content-Type": "audio/wav" }, body: visit.audio });
+      visit.audioSaved = true;
+    }
+    await api(`/api/visits/${visit.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ created: visit.created, turns: state.turns, roles: state.roles, ...snapshot(), text: noteAsText() }),
+    });
+    refreshVisits();
+  } catch (error) {
+    progress(`This visit could not be saved: ${error.message}`, true);
+  }
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveVisit, 400);
+}
+
+const timeOf = (visit) => (visit.created ? new Date(visit.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "");
+
+async function refreshVisits() {
+  let visits;
+  try { visits = (await api("/api/visits")).visits; } catch { return; }
+  $("visits-open").textContent = visits.length ? `Saved visits (${visits.length})` : "Saved visits";
+  $("visits-none").hidden = visits.length !== 0;
+  $("visits-export").hidden = visits.length === 0;
+  $("visits-list").replaceChildren(...visits.map((visit) => {
+    const open = el("button", "visit-open");
+    open.type = "button";
+    open.append(
+      el("span", "visit-time", timeOf(visit)),
+      el("span", "visit-title", visit.title),
+      el("span", `check ${visit.to_verify ? "nodose" : "heard"}`, visit.to_verify ? `${visit.to_verify} to verify` : "Verified"),
+      el("span", "visit-handoff", visit.handoff),
+    );
+    open.addEventListener("click", () => openVisit(visit));
+
+    const remove = el("button", "btn small", "Delete");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Delete the visit from ${timeOf(visit)}: ${visit.title}`);
+    remove.addEventListener("click", () => deleteVisit(visit));
+
+    const row = el("li", "visit-row");
+    row.append(open, remove);
+    return row;
+  }));
+}
+
+async function openVisit(visit) {
+  if (state.busy || state.recorder) return;
+  try {
+    const record = await api(`/api/visits/${visit.id}`);
+    const audio = await fetch(`/api/visits/${visit.id}/audio`);
+    if (state.audioUrl) URL.revokeObjectURL(state.audioUrl);
+    state.audioUrl = audio.ok ? URL.createObjectURL(await audio.blob()) : null;
+    if (state.audioUrl) player.src = state.audioUrl;
+    state.turns = record.turns || [];
+    state.roles = record.roles || {};
+    state.visit = { id: visit.id, created: record.created, audio: null, audioSaved: true };
+    renderTranscript();
+    renderNote(record);
+    $("visits").close();
+    progress(`Opened the saved visit from ${timeOf(visit)}.`);
+  } catch (error) {
+    progress(`That visit could not be opened: ${error.message}`, true);
+  }
+}
+
+async function deleteVisit(visit) {
+  const question = `Delete "${visit.title}" from ${timeOf(visit)}? The note and its recording are removed from this laptop and cannot be recovered.`;
+  if (!confirm(question)) return;
+  try {
+    await api(`/api/visits/${visit.id}`, { method: "DELETE" });
+    // If it is the visit on screen, forget it, so the next autosave does not bring it back.
+    if (state.visit?.id === visit.id) state.visit = null;
+    refreshVisits();
+  } catch (error) {
+    progress(`That visit could not be deleted: ${error.message}`, true);
+  }
+}
+
 // ---------- wiring ----------
+
+// Save again whenever a tick changes or an edited field loses focus.
+$("note").addEventListener("change", scheduleSave);
+$("note").addEventListener("focusout", scheduleSave);
+$("visits-open").addEventListener("click", () => { refreshVisits(); $("visits").showModal(); });
+$("visits-close").addEventListener("click", () => $("visits").close());
 
 $("record").addEventListener("click", () => (state.recorder ? stopRecording() : startRecording()));
 
@@ -482,5 +615,6 @@ window.addEventListener("online", showNetwork);
 window.addEventListener("offline", showNetwork);
 showNetwork();
 checkHealth();
+refreshVisits();
 setInterval(checkHealth, 5000);
 fetch("sample-visit.wav", { method: "HEAD" }).then((r) => { $("sample").hidden = !r.ok; }).catch(() => {});

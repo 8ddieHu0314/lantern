@@ -12,11 +12,14 @@
       <h1>Lantern</h1>
       <p>For when the hospital goes dark.</p>
     </div>
-    <ul class="status" aria-label="System status">
-      <li id="st-network" class="pill">Network: checking</li>
-      <li id="st-speech" class="pill">Speech: checking</li>
-      <li id="st-llm" class="pill">Bonsai: checking</li>
-    </ul>
+    <div class="top-right">
+      <ul class="status" aria-label="System status">
+        <li id="st-network" class="pill">Network: checking</li>
+        <li id="st-speech" class="pill">Speech: checking</li>
+        <li id="st-llm" class="pill">Bonsai: checking</li>
+      </ul>
+      <button id="visits-open" class="btn small" type="button">Saved visits</button>
+    </div>
   </header>
 
   <main class="columns">
@@ -111,6 +114,19 @@
       </article>
     </section>
   </main>
+
+  <dialog id="visits" class="visits" aria-labelledby="visits-h">
+    <div class="panel-head">
+      <h2 id="visits-h">Saved visits</h2>
+      <button id="visits-close" class="btn small" type="button">Close</button>
+    </div>
+    <p class="muted">Every note from this outage is kept on this laptop. Export them when the record system is back.</p>
+    <ul id="visits-list" class="visit-list"></ul>
+    <p id="visits-none" class="muted" hidden>No visits saved yet. A visit is saved as soon as its note is drafted.</p>
+    <div class="controls">
+      <a id="visits-export" class="btn primary" href="/api/visits/export.txt" download>Export all as text</a>
+    </div>
+  </dialog>
 
   <script src="app.js"></script>
 </body>
